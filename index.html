@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#111318" />
+    <title>Deadlock Draft Oracle</title>
+    <link rel="preconnect" href="https://deadlock.io" />
+    <link rel="preconnect" href="https://assets.deadlock-api.com" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <a class="brand" href="/" aria-label="Draft Oracle home">
+          <span class="brand-mark">D</span>
+          <span>Draft Oracle</span>
+        </a>
+        <div class="source-status" id="sourceStatus" aria-live="polite">
+          <span class="status-dot"></span>
+          <span>Connecting to live roster…</span>
+        </div>
+        <button class="icon-button" id="refreshButton" type="button" title="Refresh live roster" aria-label="Refresh live roster">↻</button>
+      </header>
+
+      <section class="hero-stage" aria-labelledby="pickedLabel">
+        <div class="ambient ambient-one"></div>
+        <div class="ambient ambient-two"></div>
+        <div class="scanlines"></div>
+        <div class="eyebrow" id="pickedLabel">THE ORACLE CHOOSES</div>
+        <div class="hero-art" id="heroArt" aria-hidden="true"></div>
+        <p class="hero-number" id="heroNumber">LIVE ROSTER</p>
+        <h1 id="heroName">Loading your next main</h1>
+        <p class="hero-description" id="heroDescription">Syncing with the current Deadlock character roster.</p>
+        <div class="pick-controls">
+          <button class="primary-button" id="rollButton" type="button" disabled>
+            <span class="dice">✦</span> PICK MY HERO
+          </button>
+          <button class="secondary-button" id="excludePickedButton" type="button" disabled>Exclude pick</button>
+        </div>
+        <p class="shortcut">Press <kbd>Space</kbd> to reroll</p>
+      </section>
+
+      <section class="dashboard" aria-label="Randomizer settings and hero roster">
+        <div class="settings-panel">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">DRAFT SETTINGS</p>
+              <h2>Shape the chaos</h2>
+            </div>
+            <span class="eligible-count" id="eligibleCount">0 eligible</span>
+          </div>
+
+          <label class="toggle-row">
+            <input id="recentToggle" type="checkbox" checked />
+            <span class="toggle-ui"></span>
+            <span><strong>Avoid recent picks</strong><small>Keep the last 5 choices out of the pool.</small></span>
+          </label>
+          <label class="toggle-row">
+            <input id="releasedToggle" type="checkbox" checked />
+            <span class="toggle-ui"></span>
+            <span><strong>Released heroes only</strong><small>Leave unreleased and test characters out.</small></span>
+          </label>
+
+          <div class="recent-wrap">
+            <div class="micro-heading"><span>RECENTLY DRAWN</span><button id="clearHistory" type="button">Clear</button></div>
+            <div class="recent-list" id="recentList"><span class="empty-copy">No picks yet. The city is waiting.</span></div>
+          </div>
+          <p class="source-note">Roster comes from the community’s live game-data feeds. <a href="https://deadlock.io/api/v1/heroes.json" target="_blank" rel="noreferrer">View source ↗</a></p>
+        </div>
+
+        <div class="roster-panel">
+          <div class="section-heading roster-heading">
+            <div>
+              <p class="eyebrow">LIVE HERO ROSTER</p>
+              <h2 id="rosterTitle">Awaiting signal</h2>
+            </div>
+            <div class="search-box"><span>⌕</span><input id="searchInput" type="search" placeholder="Search heroes" aria-label="Search heroes" /></div>
+          </div>
+          <div id="rosterGrid" class="roster-grid" aria-live="polite"></div>
+        </div>
+      </section>
+    </main>
+    <template id="heroCardTemplate">
+      <button class="hero-card" type="button">
+        <span class="card-art"></span>
+        <span class="card-name"></span>
+        <span class="card-state"></span>
+      </button>
+    </template>
+    <script src="app.js"></script>
+  </body>
+</html>
