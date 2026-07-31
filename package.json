@@ -1,0 +1,14 @@
+{
+  "name": "deadlock-draft-oracle",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Hero randomizer for Deadlock — solo picks or a full squad of six, from the live community roster feeds.",
+  "keywords": ["deadlock", "randomizer", "hero-picker"],
+  "license": "MIT",
+  "scripts": {
+    "start": "npx --yes serve . -l 5173",
+    "test": "node scripts/verify.mjs",
+    "test:offline": "node scripts/verify.mjs --offline",
+    "typecheck": "npx --yes -p typescript@5 tsc --project jsconfig.json"
+  }
+}
