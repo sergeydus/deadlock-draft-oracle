@@ -5,8 +5,15 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#111318" />
     <title>Deadlock Draft Oracle</title>
+    <meta name="description" content="Randomize your next Deadlock hero — solo or a full squad of six." />
     <link rel="preconnect" href="https://deadlock.io" />
     <link rel="preconnect" href="https://assets.deadlock-api.com" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@400;500;600;700&display=swap"
+    />
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
@@ -32,11 +39,15 @@
         <p class="hero-number" id="heroNumber">LIVE ROSTER</p>
         <h1 id="heroName">Loading your next main</h1>
         <p class="hero-description" id="heroDescription">Syncing with the current Deadlock character roster.</p>
+
+        <div class="squad-strip" id="squadStrip" role="group" aria-label="Squad draw" hidden></div>
+
         <div class="pick-controls">
           <button class="primary-button" id="rollButton" type="button" disabled>
-            <span class="dice">✦</span> PICK MY HERO
+            <span class="dice" aria-hidden="true">✦</span> <span id="rollLabel">PICK MY HERO</span>
           </button>
           <button class="secondary-button" id="excludePickedButton" type="button" disabled>Exclude pick</button>
+          <button class="secondary-button" id="shareButton" type="button" disabled>Copy draw link</button>
         </div>
         <p class="shortcut">Press <kbd>Space</kbd> to reroll</p>
       </section>
@@ -62,10 +73,22 @@
             <span><strong>Released heroes only</strong><small>Leave unreleased and test characters out.</small></span>
           </label>
 
+          <div class="squad-row">
+            <span><strong>Squad size</strong><small>Draw a whole stack at once — never a duplicate.</small></span>
+            <div class="squad-size" id="squadSize" role="group" aria-label="Squad size"></div>
+          </div>
+
           <div class="recent-wrap">
             <div class="micro-heading"><span>RECENTLY DRAWN</span><button id="clearHistory" type="button">Clear</button></div>
             <div class="recent-list" id="recentList"><span class="empty-copy">No picks yet. The city is waiting.</span></div>
           </div>
+
+          <div class="tally-wrap">
+            <div class="micro-heading"><span>DRAW LOG</span><button id="clearTally" type="button">Reset</button></div>
+            <p class="tally-total" id="tallyTotal">0 draws recorded</p>
+            <ol class="tally-list" id="tallyList"></ol>
+          </div>
+
           <p class="source-note">Roster comes from the community’s live game-data feeds. <a href="https://deadlock.io/api/v1/heroes.json" target="_blank" rel="noreferrer">View source ↗</a></p>
         </div>
 
@@ -75,12 +98,13 @@
               <p class="eyebrow">LIVE HERO ROSTER</p>
               <h2 id="rosterTitle">Awaiting signal</h2>
             </div>
-            <div class="search-box"><span>⌕</span><input id="searchInput" type="search" placeholder="Search heroes" aria-label="Search heroes" /></div>
+            <div class="search-box"><span aria-hidden="true">⌕</span><input id="searchInput" type="search" placeholder="Search heroes" aria-label="Search heroes" /></div>
           </div>
           <div id="rosterGrid" class="roster-grid" aria-live="polite"></div>
         </div>
       </section>
     </main>
+
     <template id="heroCardTemplate">
       <button class="hero-card" type="button">
         <span class="card-art"></span>
@@ -88,6 +112,27 @@
         <span class="card-state"></span>
       </button>
     </template>
+
+    <template id="squadSlotTemplate">
+      <div class="squad-slot">
+        <button class="slot-main" type="button">
+          <span class="slot-art"></span>
+          <span class="slot-index"></span>
+          <span class="slot-name"></span>
+        </button>
+        <button class="slot-reroll" type="button">↻</button>
+      </div>
+    </template>
+
+    <template id="tallyRowTemplate">
+      <li class="tally-row">
+        <span class="tally-name"></span>
+        <span class="tally-track"><span class="tally-fill"></span></span>
+        <span class="tally-count"></span>
+      </li>
+    </template>
+
+    <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
     <script src="app.js"></script>
   </body>
 </html>
