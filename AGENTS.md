@@ -47,8 +47,22 @@ Wiring.
 One `Hero` shape, normalised out of whichever feed answered:
 
 ```js
-{ id: string, name: string, description: string, image: string, released: boolean }
+{
+  id: string, name: string, description: string, image: string, released: boolean,
+  complexity: number,  // 1-4, the game's own rating; 0 when unknown
+  role: string,        // 'marksman' | 'assassin' | 'mystic' | 'brawler' | ''
+  weapon: string,      // gun archetype, e.g. 'Spreadshot'
+  accent: string,      // '#rrggbb' hero colour, tints the stage ambience
+  aliases: string,     // lowercased localized names + romanizations, for search
+}
 ```
+
+**Neither feed carries all of it.** `deadlock-api` has `role` and `accent`;
+`deadlock.io` has the 17-language names and search aliases. So `getLiveHeroes()`
+loads a base roster from the first source that answers, then `enrichRoster()`
+fetches the *other* source in the background and fills in the blanks, merged by
+`id`. The merge is only possible because ids are feed-independent (below), and it
+is best-effort: if it fails you lose a filter and a colour, never the roster.
 
 `id` is the primary key for **everything**: exclusions, the draw tally, roster card
 lookup and share links. It is deliberately derived from the engine class name
@@ -84,7 +98,8 @@ documented with a JSDoc typedef — update that typedef when you add a field.
 
 | Goal | Touch |
 |---|---|
-| New filter on the draw pool | `eligibleHeroes()` — plus a control in `index.html` and a field in `saveState`/`loadState` |
+| New filter on the draw pool | `eligibleHeroes()` — plus a control in `index.html`, a chip builder, and a field in `saveState`/`loadState` |
+| Use another field from the feeds | Widen the `Hero` typedef → `normalise()` → `isHeroRecord()` → the merge list in `enrichRoster()` |
 | New persisted setting | `state` typedef → `saveState()` → `loadState()` → `render()` |
 | New feed source | Append to `SOURCES`; verify `normalise()` handles its field names |
 | Change the stage display | `updateStage()` only |
@@ -108,6 +123,15 @@ documented with a JSDoc typedef — update that typedef when you add a field.
   `npm test` output after touching it.
 - **Descriptions can be long lore paragraphs** for newer heroes (they have no
   short blurb), which is why `.hero-description` is line-clamped to 3.
+- **Role data has upstream gaps.** Familiar has never carried a `hero_type`, and a
+  hero with `role: ''` is unreachable while a role filter is active — that is
+  intended (filtering to "marksman" must not return an unclassified hero). The
+  role controls stay hidden until enrichment supplies roles, so the filter can
+  never silently empty the pool. `npm test` fails if more than two released
+  heroes lose their role.
+- **Role coverage draws** (`drawSquad`) visit roles in random order and shuffle the
+  result, so a squad smaller than the role count does not always favour the same
+  roles and the featured hero is not always the first role drawn.
 - **Two `localStorage` keys**: `draftOracle_v1` (settings/history) and
   `draftOracle_v1_roster` (the offline roster cache). Reading either can throw in
   private mode — every access is already wrapped.
@@ -134,9 +158,13 @@ over http with devtools open — the console must stay clean:
 3. Squad size 6 → six distinct slots; per-slot `↻` replaces only that slot; a slot
    click features it on the stage.
 4. Search filters the grid; clicking a card toggles exclusion; the eligible count
-   moves.
-5. **Copy draw link** → open the URL in a new tab → the same draw appears labelled
+   moves. Searching `火男` or `infa-nasu` finds Infernus.
+5. Complexity chips and (a moment after load, once enrichment lands) role chips
+   filter the pool; deselecting the last complexity level is refused. With squad
+   size ≥ 2, **Cover every role** yields one hero per role first.
+6. The stage ambience changes colour per drawn hero.
+7. **Copy draw link** → open the URL in a new tab → the same draw appears labelled
    `SHARED DRAW`, and it does not add to the draw log.
-6. Reload → exclusions, recents, draw log and squad size all survive.
-7. Offline (devtools → Network → Offline) → refresh → falls back to the cached
+8. Reload → exclusions, recents, draw log, squad size and filters all survive.
+9. Offline (devtools → Network → Offline) → refresh → falls back to the cached
    roster instead of hanging.

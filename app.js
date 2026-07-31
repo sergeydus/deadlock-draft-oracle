@@ -21,6 +21,11 @@
  * @property {string} description  May be an empty string; the stage falls back to filler copy.
  * @property {string} image        Absolute URL, or an empty string when the feed had no art.
  * @property {boolean} released    False for unreleased/test characters.
+ * @property {number} complexity   1-4 as rated by the game, or 0 when unknown.
+ * @property {string} role         'marksman' | 'assassin' | 'mystic' | 'brawler', or '' when unknown.
+ * @property {string} weapon       Gun archetype ('Pistol', 'Spreadshot', …), or ''.
+ * @property {string} accent       Hero accent colour as '#rrggbb', or ''.
+ * @property {string} aliases      Lowercased localized names + romanizations, for search.
  */
 
 const SOURCES = [
@@ -29,6 +34,8 @@ const SOURCES = [
 ];
 const RECENT_LIMIT = 5;
 const MAX_SQUAD = 6; // Deadlock is 6v6, so a full stack is six heroes.
+const COMPLEXITY_LEVELS = [1, 2, 3, 4]; // The game's own rating; both feeds agree on it.
+const ROLE_ORDER = ['marksman', 'assassin', 'mystic', 'brawler']; // deadlock-api `hero_type`.
 const TALLY_ROWS = 6;
 const FETCH_TIMEOUT_MS = 8000;
 const STORAGE_KEY = 'draftOracle_v1';
@@ -37,7 +44,9 @@ const ROSTER_KEY = `${STORAGE_KEY}_roster`;
 /**
  * Single source of truth. Everything on screen is derived from this by render().
  * @type {{heroes: Hero[], byId: Map<string, Hero>, squad: Hero[], featured: number,
- *         squadSize: number, excluded: Set<string>, recent: Hero[],
+ *         squadSize: number, coverRoles: boolean,
+ *         filters: {complexity: Set<number>, roles: Set<string>},
+ *         excluded: Set<string>, recent: Hero[],
  *         tally: Record<string, number>, pickCount: number, source: string,
  *         fetching: boolean, seed: number, shared: boolean}}
  */
@@ -47,6 +56,9 @@ const state = {
   squad: [],        // The current draw. Length 1 for a solo pick, up to MAX_SQUAD for a stack.
   featured: 0,      // Index into squad shown large on the stage.
   squadSize: 1,
+  coverRoles: false, // Squad draws take one of each role before filling the rest.
+  // An empty set means "no constraint" for roles; complexity defaults to all levels.
+  filters: { complexity: new Set(COMPLEXITY_LEVELS), roles: new Set() },
   excluded: new Set(),
   recent: [],
   tally: {},        // heroId -> times drawn, lifetime
@@ -64,6 +76,8 @@ const els = {
   refresh: $('#refreshButton'), source: $('#sourceStatus'), count: $('#eligibleCount'),
   rosterTitle: $('#rosterTitle'), grid: $('#rosterGrid'), recent: $('#recentList'), squadStrip: $('#squadStrip'),
   squadSize: $('#squadSize'), tallyList: $('#tallyList'), tallyTotal: $('#tallyTotal'), clearTally: $('#clearTally'),
+  stage: $('.hero-stage'), heroTags: $('#heroTags'), complexityFilter: $('#complexityFilter'),
+  roleFilter: $('#roleFilter'), roleRow: $('#roleRow'), coverRolesRow: $('#coverRolesRow'), coverRolesToggle: $('#coverRolesToggle'),
   recentToggle: $('#recentToggle'), releasedToggle: $('#releasedToggle'), search: $('#searchInput'),
   clear: $('#clearHistory'), toast: $('#toast'),
   cardTemplate: $('#heroCardTemplate'), slotTemplate: $('#squadSlotTemplate'), tallyTemplate: $('#tallyRowTemplate'),
@@ -99,16 +113,46 @@ function reseed(seed = randomSeed()) {
 }
 
 /**
- * Draw `count` distinct heroes from `pool`.
- * @param {Hero[]} pool
+ * Draw `count` distinct items from `pool`. Called with count === pool.length it
+ * is simply a shuffle.
+ * @template T
+ * @param {T[]} pool
  * @param {number} count
- * @returns {Hero[]} Up to `count` heroes; fewer if the pool is too small.
+ * @returns {T[]} Up to `count` items; fewer if the pool is too small.
  */
 function drawFrom(pool, count) {
   const bag = [...pool];
   const drawn = [];
   while (drawn.length < count && bag.length) drawn.push(...bag.splice(Math.floor(rng() * bag.length), 1));
   return drawn;
+}
+
+/**
+ * Draw a squad, optionally guaranteeing role coverage.
+ *
+ * With coverage on, one hero is taken from each role before the remaining slots
+ * are filled at random. Roles are visited in random order so that a squad
+ * smaller than the number of roles does not always favour the same ones, and the
+ * result is shuffled so the featured hero is not always the first role drawn.
+ * @param {Hero[]} pool
+ * @param {number} size
+ * @returns {Hero[]}
+ */
+function drawSquad(pool, size) {
+  const roles = [...new Set(pool.map((hero) => hero.role).filter(Boolean))];
+  if (!state.coverRoles || size < 2 || roles.length < 2) return drawFrom(pool, size);
+  const picked = [];
+  const used = new Set();
+  for (const role of drawFrom(roles, roles.length)) {
+    if (picked.length >= size) break;
+    const candidates = pool.filter((hero) => hero.role === role && !used.has(hero.id));
+    if (!candidates.length) continue;
+    const [hero] = drawFrom(candidates, 1);
+    picked.push(hero);
+    used.add(hero.id);
+  }
+  const rest = drawFrom(pool.filter((hero) => !used.has(hero.id)), size - picked.length);
+  return drawFrom([...picked, ...rest], size);
 }
 
 /* ── Storage helpers ────────────────────────────────────────────────────── */
@@ -121,6 +165,9 @@ function saveState() {
       tally: state.tally,
       pickCount: state.pickCount,
       squadSize: state.squadSize,
+      coverRoles: state.coverRoles,
+      complexityFilter: [...state.filters.complexity],
+      roleFilter: [...state.filters.roles],
       recentToggle: els.recentToggle.checked,
       releasedToggle: els.releasedToggle.checked,
     }));
@@ -131,7 +178,11 @@ function saveCachedRoster() {
     localStorage.setItem(ROSTER_KEY, JSON.stringify({ heroes: state.heroes, source: state.source }));
   } catch (_) { /* skip */ }
 }
-/** Runtime shape guard — cached/restored data may predate the current schema. */
+/**
+ * Runtime shape guard — cached/restored data may predate the current schema.
+ * The metadata fields are checked too, so a cache written before they existed is
+ * rejected and refetched rather than silently disabling the filters.
+ */
 function isHeroRecord(hero) {
   return hero !== null
     && typeof hero === 'object'
@@ -141,7 +192,12 @@ function isHeroRecord(hero) {
     && hero.name.trim().length > 0
     && typeof hero.description === 'string'
     && typeof hero.image === 'string'
-    && typeof hero.released === 'boolean';
+    && typeof hero.released === 'boolean'
+    && typeof hero.complexity === 'number'
+    && typeof hero.role === 'string'
+    && typeof hero.weapon === 'string'
+    && typeof hero.accent === 'string'
+    && typeof hero.aliases === 'string';
 }
 function loadState() {
   try {
@@ -155,6 +211,12 @@ function loadState() {
     }
     if (Number.isFinite(data.pickCount) && data.pickCount >= 0) state.pickCount = data.pickCount;
     if (Number.isFinite(data.squadSize)) state.squadSize = Math.min(MAX_SQUAD, Math.max(1, data.squadSize));
+    if (typeof data.coverRoles === 'boolean') state.coverRoles = data.coverRoles;
+    if (Array.isArray(data.complexityFilter)) {
+      const levels = data.complexityFilter.filter((level) => COMPLEXITY_LEVELS.includes(level));
+      if (levels.length) state.filters.complexity = new Set(levels);
+    }
+    if (Array.isArray(data.roleFilter)) state.filters.roles = new Set(data.roleFilter.filter((role) => ROLE_ORDER.includes(role)));
     if (typeof data.recentToggle === 'boolean') els.recentToggle.checked = data.recentToggle;
     if (typeof data.releasedToggle === 'boolean') els.releasedToggle.checked = data.releasedToggle;
   } catch (_) { /* corrupt data – start fresh */ }
@@ -202,6 +264,23 @@ function descriptionFrom(value) {
   if (!value || typeof value !== 'object') return '';
   return firstText(localized(value), value.role, value.playstyle, value.lore);
 }
+/**
+ * Flatten every localized spelling of a hero's name into one searchable string.
+ * deadlock.io ships 17 languages plus romanizations and community nicknames in
+ * `searchName` ("infa-nasu", "火男"), which makes the search box work for players
+ * who do not type the English name.
+ */
+function aliasesFrom(raw) {
+  const parts = new Set();
+  for (const field of [raw.searchName, raw.displayName, raw.name, raw.localized_name]) {
+    if (typeof field === 'string') parts.add(field);
+    else if (field && typeof field === 'object') {
+      const values = field.byLanguage && typeof field.byLanguage === 'object' ? field.byLanguage : field;
+      for (const value of Object.values(values)) if (typeof value === 'string') parts.add(value);
+    }
+  }
+  return [...parts].join(' ').toLowerCase();
+}
 function absoluteImage(path, origin) {
   if (!path) return path;
   if (path.startsWith('//')) return `https:${path}`;
@@ -235,7 +314,24 @@ function normalise(raw, index, origin) {
     || raw.playerSelectable === false || raw.player_selectable === false || raw.inDevelopment || raw.in_development
     || raw.needs_testing || raw.prerelease_only || raw.limited_testing || raw.assigned_players_only
     || /unreleased|upcoming|test/.test(rawStatus));
-  return { id, name: name.replace(/^hero_/i, '').replace(/_/g, ' '), description, image, released };
+  // These five are split across the feeds — deadlock-api has role/accent,
+  // deadlock.io has the localized aliases — so enrichRoster() merges them.
+  const complexity = Number.isFinite(Number(raw.complexity)) ? Number(raw.complexity) : 0;
+  const role = firstText(raw.hero_type, raw.heroType, raw.role_name).toLowerCase();
+  const weapon = firstText(localized(raw.gunArchetype), raw.gun_tag, raw.weapon_archetype);
+  const accent = firstText(raw.colors?.style_hex, raw.colors?.ui_hex, raw.color);
+  return {
+    id,
+    name: name.replace(/^hero_/i, '').replace(/_/g, ' '),
+    description,
+    image,
+    released,
+    complexity: complexity > 0 ? complexity : 0,
+    role,
+    weapon,
+    accent: /^#[0-9a-f]{6}$/i.test(accent) ? accent : '',
+    aliases: aliasesFrom(raw),
+  };
 }
 
 /* ── Small DOM helpers ─────────────────────────────────────────────────── */
@@ -291,7 +387,19 @@ function reconcileRestoredState() {
  */
 function eligibleHeroes({ ignoreRecent = false } = {}) {
   const avoid = !ignoreRecent && els.recentToggle.checked ? new Set(state.recent.map((hero) => hero.id)) : new Set();
-  return state.heroes.filter((hero) => (!els.releasedToggle.checked || hero.released) && !state.excluded.has(hero.id) && !avoid.has(hero.id));
+  const { complexity, roles } = state.filters;
+  return state.heroes.filter((hero) => (!els.releasedToggle.checked || hero.released)
+    && !state.excluded.has(hero.id)
+    && !avoid.has(hero.id)
+    // An unrated hero is never filtered out by complexity; a role filter is only
+    // offered once role data has actually arrived, so it can demand a match.
+    && (!hero.complexity || complexity.has(hero.complexity))
+    && (!roles.size || roles.has(hero.role)));
+}
+
+/** True once any hero has a role, i.e. the enrichment pass found role data. */
+function hasRoleData() {
+  return state.heroes.some((hero) => hero.role);
 }
 
 /** The pool for a draw of `size`, relaxing the "avoid recent" rule only if it would starve the draw. */
@@ -340,7 +448,7 @@ function roll() {
     render();
     return;
   }
-  commitDraw(drawFrom(pool, state.squadSize));
+  commitDraw(drawSquad(pool, state.squadSize));
 }
 
 /** Reroll a single squad slot, keeping the rest of the stack intact. */
@@ -413,6 +521,9 @@ function updateStage() {
   });
   els.description.textContent = hero.description || 'No signals, no scripts — just commit to the draw and make it work.';
   els.description.title = hero.description || ''; // the copy is clamped to 3 lines
+  // The stage ambience picks up the hero's own accent colour from the feed.
+  els.stage.style.setProperty('--hero-accent', hero.accent || '');
+  renderHeroTags(hero);
 
   const label = state.shared ? 'SHARED DRAW'
     : state.squad.length > 1 ? `SQUAD OF ${state.squad.length}  ·  DRAW ${String(state.pickCount).padStart(2, '0')}`
@@ -421,6 +532,18 @@ function updateStage() {
   setStageArt(hero.image);
   els.exclude.disabled = false;
   els.share.disabled = false;
+}
+
+const titleCase = (value) => value.charAt(0).toUpperCase() + value.slice(1);
+
+/** Role / weapon / complexity, whichever of them the feeds actually supplied. */
+function renderHeroTags(hero) {
+  const tags = [hero.role && titleCase(hero.role), hero.weapon, hero.complexity && `Complexity ${hero.complexity}`].filter(Boolean);
+  els.heroTags.hidden = !tags.length;
+  els.heroTags.replaceChildren();
+  for (const tag of tags) {
+    els.heroTags.append(Object.assign(document.createElement('span'), { className: 'hero-tag', textContent: tag }));
+  }
 }
 
 function renderSquadStrip() {
@@ -494,7 +617,7 @@ function buildRoster() {
   for (const hero of state.heroes) {
     const card = els.cardTemplate.content.firstElementChild.cloneNode(true);
     card.dataset.heroId = hero.id;
-    card.dataset.search = hero.name.toLowerCase();
+    card.dataset.search = `${hero.name.toLowerCase()} ${hero.aliases}`;
     if (hero.image) card.querySelector('.card-art').style.backgroundImage = cssUrl(hero.image);
     card.querySelector('.card-name').textContent = hero.name;
     cardIndex.set(hero.id, card);
@@ -542,6 +665,38 @@ function syncSquadSizeControl() {
   els.rollLabel.textContent = state.squadSize > 1 ? `DRAW SQUAD OF ${state.squadSize}` : 'PICK MY HERO';
 }
 
+/**
+ * Role controls only appear once the enrichment pass has supplied roles, so the
+ * UI never offers a filter that would silently empty the pool.
+ */
+function syncFilterControls() {
+  for (const button of els.complexityFilter.children) {
+    const active = state.filters.complexity.has(Number(button.dataset.value));
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-pressed', active ? 'true' : 'false');
+  }
+  const roles = ROLE_ORDER.filter((role) => state.heroes.some((hero) => hero.role === role));
+  const showRoles = roles.length > 1;
+  els.roleRow.hidden = !showRoles;
+  els.coverRolesRow.hidden = !showRoles || state.squadSize < 2;
+  if (!showRoles) return;
+  if (els.roleFilter.children.length !== roles.length) {
+    els.roleFilter.replaceChildren(...roles.map((role) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.dataset.value = role;
+      button.textContent = titleCase(role);
+      return button;
+    }));
+  }
+  for (const button of els.roleFilter.children) {
+    const active = state.filters.roles.has(button.dataset.value);
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-pressed', active ? 'true' : 'false');
+  }
+  els.coverRolesToggle.checked = state.coverRoles;
+}
+
 /** Repaint every derived surface. Cheap enough to call after any state change. */
 function render() {
   const available = eligibleHeroes();
@@ -549,6 +704,7 @@ function render() {
   els.rosterTitle.textContent = `${state.heroes.length} heroes detected`;
   els.roll.disabled = !state.heroes.length;
   syncSquadSizeControl();
+  syncFilterControls();
   syncRosterState();
   applySearch();
   renderSquadStrip();
@@ -568,6 +724,44 @@ async function fetchJson(url, timeoutMs = FETCH_TIMEOUT_MS) {
     return await response.json();
   } finally {
     clearTimeout(timer);
+  }
+}
+
+/**
+ * Fill in metadata the base feed did not carry, using the other sources.
+ *
+ * Neither feed is complete on its own: deadlock-api has `hero_type` and the
+ * accent colour, deadlock.io has the 17-language names and search aliases. Ids
+ * are derived from the engine class name so they match across both, which is
+ * what makes this merge possible. Best-effort — a failure here costs a filter or
+ * a colour, never the roster.
+ * @param {string} baseSourceName The source that supplied the roster already loaded.
+ */
+async function enrichRoster(baseSourceName) {
+  for (const source of SOURCES.filter((candidate) => candidate.name !== baseSourceName)) {
+    try {
+      const extras = new Map();
+      for (const [index, entry] of unwrap(await fetchJson(source.url)).entries()) {
+        const hero = normalise(entry, index, source.origin);
+        if (hero) extras.set(hero.id, hero);
+      }
+      let changed = false;
+      for (const hero of state.heroes) {
+        const extra = extras.get(hero.id);
+        if (!extra) continue;
+        // Mutated in place so squad/recent/byId references all see the update.
+        for (const field of ['role', 'weapon', 'accent', 'aliases', 'description', 'image']) {
+          if (!hero[field] && extra[field]) { hero[field] = extra[field]; changed = true; }
+        }
+        if (!hero.complexity && extra.complexity) { hero.complexity = extra.complexity; changed = true; }
+      }
+      if (changed) {
+        saveCachedRoster();
+        render();
+        updateStage();
+      }
+      return;
+    } catch (_) { /* enrichment is optional – keep the base roster as-is */ }
   }
 }
 
@@ -604,6 +798,9 @@ async function getLiveHeroes() {
         adoptRoster(heroes, source.name);
         saveCachedRoster();
         sourceStatus(`Live roster · ${source.name}`, 'live');
+        // Deliberately not awaited: the first draw should not wait on metadata
+        // that only enables filters and colour.
+        void enrichRoster(source.name);
         return;
       } catch (error) {
         lastError = error;
@@ -647,6 +844,17 @@ function buildSquadSizeControl() {
     frag.append(button);
   }
   els.squadSize.append(frag);
+
+  const levels = document.createDocumentFragment();
+  for (const level of COMPLEXITY_LEVELS) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.dataset.value = String(level);
+    button.textContent = String(level);
+    button.setAttribute('aria-label', `Complexity ${level}`);
+    levels.append(button);
+  }
+  els.complexityFilter.append(levels);
 }
 
 els.squadSize.addEventListener('click', (event) => {
@@ -654,6 +862,32 @@ els.squadSize.addEventListener('click', (event) => {
   if (!button) return;
   state.squadSize = Number(button.dataset.size);
   render();
+  saveState();
+});
+
+/** Toggle a chip, refusing to empty a filter set entirely (that would zero the pool). */
+function toggleFilter(set, value, { allowEmpty = false } = {}) {
+  if (set.has(value)) {
+    if (!allowEmpty && set.size === 1) return toast('Keep at least one level selected.');
+    set.delete(value);
+  } else {
+    set.add(value);
+  }
+  render();
+  saveState();
+}
+
+els.complexityFilter.addEventListener('click', (event) => {
+  const button = event.target.closest('button[data-value]');
+  if (button) toggleFilter(state.filters.complexity, Number(button.dataset.value));
+});
+els.roleFilter.addEventListener('click', (event) => {
+  const button = event.target.closest('button[data-value]');
+  // Roles allow an empty set — that means "every role", not "none".
+  if (button) toggleFilter(state.filters.roles, button.dataset.value, { allowEmpty: true });
+});
+els.coverRolesToggle.addEventListener('change', () => {
+  state.coverRoles = els.coverRolesToggle.checked;
   saveState();
 });
 

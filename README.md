@@ -12,8 +12,14 @@ or a whole six-stack.
   reroll so you can redraw one teammate without disturbing the rest.
 - **Shareable draws** — *Copy draw link* produces a URL that reproduces the exact
   result for anyone who opens it.
-- **Filters** — exclude any hero by clicking its card, hide unreleased/test
-  characters, and keep your last five picks out of the pool.
+- **Filters** — by complexity (the game's own 1–4 rating) and role
+  (marksman / assassin / mystic / brawler). Exclude any hero by clicking its card,
+  hide unreleased/test characters, and keep your last five picks out of the pool.
+- **Role coverage** — squad draws can guarantee one hero of each role before
+  filling the remaining slots.
+- **Search in any language** — the roster search matches all 17 localized
+  spellings plus romanizations, so `火男` and `infa-nasu` both find Infernus.
+- **Per-hero colour** — the stage takes on the drawn hero's own accent colour.
 - **Draw log** — a lifetime tally of what the oracle actually favours.
 - Everything persists in `localStorage`. <kbd>Space</kbd> rerolls.
 
