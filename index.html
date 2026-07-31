@@ -39,6 +39,7 @@
         <p class="hero-number" id="heroNumber">LIVE ROSTER</p>
         <h1 id="heroName">Loading your next main</h1>
         <p class="hero-description" id="heroDescription">Syncing with the current Deadlock character roster.</p>
+        <p class="hero-tags" id="heroTags" hidden></p>
 
         <div class="squad-strip" id="squadStrip" role="group" aria-label="Squad draw" hidden></div>
 
@@ -73,10 +74,26 @@
             <span><strong>Released heroes only</strong><small>Leave unreleased and test characters out.</small></span>
           </label>
 
-          <div class="squad-row">
+          <div class="filter-row">
             <span><strong>Squad size</strong><small>Draw a whole stack at once — never a duplicate.</small></span>
-            <div class="squad-size" id="squadSize" role="group" aria-label="Squad size"></div>
+            <div class="chip-group" id="squadSize" role="group" aria-label="Squad size"></div>
           </div>
+
+          <div class="filter-row">
+            <span><strong>Complexity</strong><small>The game’s own 1–4 rating for mechanical load.</small></span>
+            <div class="chip-group" id="complexityFilter" role="group" aria-label="Complexity"></div>
+          </div>
+
+          <div class="filter-row" id="roleRow" hidden>
+            <span><strong>Role</strong><small>All off means every role is allowed.</small></span>
+            <div class="chip-group" id="roleFilter" role="group" aria-label="Role"></div>
+          </div>
+
+          <label class="toggle-row" id="coverRolesRow" hidden>
+            <input id="coverRolesToggle" type="checkbox" />
+            <span class="toggle-ui"></span>
+            <span><strong>Cover every role</strong><small>Squad draws take one of each role before filling up.</small></span>
+          </label>
 
           <div class="recent-wrap">
             <div class="micro-heading"><span>RECENTLY DRAWN</span><button id="clearHistory" type="button">Clear</button></div>

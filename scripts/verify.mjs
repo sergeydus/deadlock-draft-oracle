@@ -34,8 +34,18 @@ const app = new Function(`
   ${slice('function drawFrom(pool, count)', '/* ── Storage helpers')}
   ${slice('function isHeroRecord(hero)', 'function loadState()')}
   let rng = mulberry32(12345);
-  return { unwrap, normalise, isHeroRecord, mulberry32, drawFrom };
+  return { unwrap, normalise, isHeroRecord, mulberry32, drawFrom, aliasesFrom };
 `)();
+
+/** Read an array literal constant straight out of app.js. */
+function constant(name) {
+  const start = src.indexOf(`const ${name} = [`);
+  if (start < 0) throw new Error(`app.js has no "const ${name} = [" — update scripts/verify.mjs`);
+  const open = src.indexOf('[', start);
+  return new Function(`return ${src.slice(open, src.indexOf('];', open) + 1)}`)();
+}
+const ROLE_ORDER = constant('ROLE_ORDER');
+const COMPLEXITY_LEVELS = constant('COMPLEXITY_LEVELS');
 
 const sourcesStart = src.indexOf('const SOURCES = [') + 'const SOURCES = '.length;
 const SOURCES = new Function(`return ${src.slice(sourcesStart, src.indexOf('];', sourcesStart) + 1)}`)();
@@ -94,6 +104,15 @@ if (offline) {
       check(`${source.name}: released heroes have art`, released.every((h) => /^https?:\/\//.test(h.image)));
       check(`${source.name}: released heroes have a description`, released.every((h) => h.description),
         `${released.length} released of ${heroes.length}`);
+      check(`${source.name}: complexity is one of the known levels`,
+        released.every((h) => COMPLEXITY_LEVELS.includes(h.complexity)),
+        `levels present: ${[...new Set(released.map((h) => h.complexity))].sort().join(', ')}`);
+      check(`${source.name}: roles are all known values`,
+        heroes.every((h) => !h.role || ROLE_ORDER.includes(h.role)),
+        `${[...new Set(heroes.map((h) => h.role).filter(Boolean))].join(', ') || 'none in this feed'}`);
+      check(`${source.name}: accents are valid hex`,
+        heroes.every((h) => !h.accent || /^#[0-9a-f]{6}$/i.test(h.accent)),
+        `${heroes.filter((h) => h.accent).length}/${heroes.length} have one`);
       parsed[source.name] = heroes;
     } catch (error) {
       check(`${source.name}: reachable`, false, String(error?.message ?? error));
@@ -110,6 +129,41 @@ if (offline) {
     check('both sources agree on the released roster',
       Math.abs(fallback.filter((h) => h.released).length - primary.filter((h) => h.released).length) <= 3,
       `primary ${primary.filter((h) => h.released).length}, fallback ${fallback.filter((h) => h.released).length}`);
+
+    // Neither feed carries every metadata field, so enrichRoster() merges them by
+    // id. Mirror that merge here and assert the union is actually complete —
+    // this is what the role filter and the accent colour depend on.
+    const extras = new Map(fallback.map((h) => [h.id, h]));
+    const merged = primary.map((hero) => {
+      const extra = extras.get(hero.id) ?? {};
+      const filled = { ...hero };
+      for (const field of ['role', 'weapon', 'accent', 'aliases', 'description', 'image']) {
+        if (!filled[field] && extra[field]) filled[field] = extra[field];
+      }
+      if (!filled.complexity && extra.complexity) filled.complexity = extra.complexity;
+      return filled;
+    });
+    const mergedReleased = merged.filter((h) => h.released);
+    for (const field of ['accent', 'aliases', 'complexity']) {
+      const missing = mergedReleased.filter((h) => !h[field]).map((h) => h.id);
+      check(`after the cross-feed merge every released hero has \`${field}\``, missing.length === 0,
+        missing.length ? `missing for: ${missing.join(', ')}` : `all ${mergedReleased.length}`);
+    }
+    // `hero_type` has genuine upstream gaps (Familiar has never carried one), so
+    // this tolerates a couple of stragglers but still fails if the feed drops the
+    // field wholesale. Heroes without a role are unreachable while a role filter
+    // is active, which is why the count is worth watching.
+    const roleless = mergedReleased.filter((h) => !h.role).map((h) => h.id);
+    check('after the cross-feed merge nearly every released hero has `role`',
+      roleless.length <= 2,
+      `${mergedReleased.length - roleless.length}/${mergedReleased.length}${roleless.length ? ` — no role: ${roleless.join(', ')}` : ''}`);
+    check('sources never disagree on complexity',
+      merged.every((h) => !extras.get(h.id)?.complexity || !h.complexity || extras.get(h.id).complexity === h.complexity));
+
+    const alias = merged.find((h) => h.id === 'inferno');
+    check('aliases carry non-English spellings',
+      Boolean(alias) && /[^\x00-\x7f]/.test(alias.aliases) && alias.aliases.includes('infernus'),
+      alias ? `${alias.aliases.split(' ').length} tokens` : 'inferno not found');
   }
 }
 

@@ -168,20 +168,24 @@ button {
   opacity: .6;
 }
 
+/* --hero-accent is set per draw from the feed's own hero colour; the literals
+   are the fallback for heroes (and feeds) that do not supply one. */
 .ambient-one {
   width: 290px;
   height: 250px;
-  background: #78553e;
+  background: var(--hero-accent, #78553e);
   left: 15%;
   top: 30%;
+  transition: background .45s ease;
 }
 
 .ambient-two {
   width: 220px;
   height: 180px;
-  background: #30484f;
+  background: color-mix(in oklab, var(--hero-accent, #30484f) 55%, #1e2a30);
   right: 12%;
   bottom: 7%;
+  transition: background .45s ease;
 }
 
 .scanlines {
@@ -257,6 +261,24 @@ button {
   -webkit-line-clamp: 3;
   line-clamp: 3;
   overflow: hidden;
+}
+
+.hero-tags {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+  margin: -6px 0 20px;
+}
+
+.hero-tag {
+  padding: 4px 8px;
+  color: #cfd0c7;
+  background: rgba(17, 18, 23, .6);
+  border: 1px solid var(--line);
+  font: 500 9px 'DM Mono', monospace;
+  letter-spacing: .1em;
+  text-transform: uppercase;
 }
 
 /* ── Squad strip ── */
@@ -501,9 +523,9 @@ kbd {
   margin-top: 3px;
 }
 
-/* ── Squad size ── */
+/* ── Filter rows (squad size, complexity, role) ── */
 
-.squad-row {
+.filter-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -512,28 +534,28 @@ kbd {
   border-top: 1px solid var(--line);
 }
 
-.squad-row strong {
+.filter-row strong {
   display: block;
   font-size: 13px;
 }
 
-.squad-row small {
+.filter-row small {
   display: block;
   color: var(--muted);
   font-size: 11px;
   margin-top: 3px;
 }
 
-.squad-size {
+.chip-group {
   display: flex;
   flex-shrink: 0;
   border: 1px solid var(--line);
 }
 
-.squad-size button {
-  width: 27px;
+.chip-group button {
+  min-width: 27px;
   height: 28px;
-  padding: 0;
+  padding: 0 8px;
   border: 0;
   border-left: 1px solid var(--line);
   background: transparent;
@@ -541,15 +563,15 @@ kbd {
   font: 500 11px 'DM Mono', monospace;
 }
 
-.squad-size button:first-child {
+.chip-group button:first-child {
   border-left: 0;
 }
 
-.squad-size button:hover {
+.chip-group button:hover {
   color: var(--acid);
 }
 
-.squad-size button.active {
+.chip-group button.active {
   background: var(--acid);
   color: #171910;
 }
@@ -806,7 +828,7 @@ kbd {
 .hero-card:focus-visible,
 .slot-main:focus-visible,
 .slot-reroll:focus-visible,
-.squad-size button:focus-visible,
+.chip-group button:focus-visible,
 .micro-heading button:focus-visible {
   outline: 2px solid var(--acid);
   outline-offset: 2px;
@@ -900,7 +922,7 @@ kbd {
     width: calc(50% - 4px);
   }
 
-  .squad-row {
+  .filter-row {
     align-items: flex-start;
     flex-direction: column;
     gap: 10px;
