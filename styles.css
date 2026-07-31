@@ -200,15 +200,24 @@ button {
 .hero-art {
   position: absolute;
   z-index: -1;
-  width: 400px;
-  height: 350px;
-  max-width: 65vw;
+  /* Both feeds only ship a 280x380 portrait card, so the box matches that ratio.
+     It used to be a 400x350 landscape box, which left `contain` shrinking the
+     art into dead space that the mask then ate into. */
+  top: 50%;
+  left: 50%;
+  width: min(300px, 58vw);
+  aspect-ratio: 280 / 380;
+  transform: translate(-50%, -50%);
   opacity: .55;
   background-position: center;
   background-repeat: no-repeat;
   background-size: contain;
   filter: grayscale(.35) contrast(1.1);
-  mask-image: linear-gradient(to bottom, transparent, black 18%, black 78%, transparent);
+  /* Radial, so the card's own rectangular edges dissolve on all four sides. The
+     old vertical-only gradient faded the top 18% and bottom 22% of the box,
+     which cut the hero's head and feet off. */
+  -webkit-mask-image: radial-gradient(ellipse 80% 84% at 50% 46%, #000 62%, transparent 100%);
+  mask-image: radial-gradient(ellipse 80% 84% at 50% 46%, #000 62%, transparent 100%);
   transition: background-image .35s ease, opacity .2s ease;
 }
 
@@ -888,7 +897,7 @@ kbd {
   }
 
   .hero-art {
-    width: 330px;
+    width: min(240px, 62vw);
   }
 
   .squad-slot {

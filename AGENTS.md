@@ -132,6 +132,11 @@ documented with a JSDoc typedef — update that typedef when you add a field.
 - **Role coverage draws** (`drawSquad`) visit roles in random order and shuffle the
   result, so a squad smaller than the role count does not always favour the same
   roles and the featured hero is not always the first role drawn.
+- **`.hero-art` is sized to the art's real 280x380 ratio**, which is the only
+  portrait size either feed ships. Its mask is radial so the card's rectangular
+  edges dissolve on all four sides — the earlier vertical-only gradient faded the
+  top 18% and bottom 22% of the box and cut heroes' heads off. `npm test` asserts
+  the upstream art is still 280x380, so if that check fails, restyle the box.
 - **Two `localStorage` keys**: `draftOracle_v1` (settings/history) and
   `draftOracle_v1_roster` (the offline roster cache). Reading either can throw in
   private mode — every access is already wrapped.
@@ -146,9 +151,18 @@ npm run typecheck   # TypeScript over the JSDoc annotations; no TS files, no emi
 
 `scripts/verify.mjs` cannot `import` from `app.js` (no module system), so it
 **slices the pure sections out of the real source** by their `/* ── Section ── */`
-markers and runs them in Node. If you rename a marker, update the slice bounds —
-it throws rather than testing less. The network half doubles as an upstream canary:
-it is what caught `deadlock-api.com` moving its heroes endpoint.
+markers and runs them in Node against stub `state` / `els` objects. If you rename
+a marker or move a function across one, update the slice bounds — it throws rather
+than testing less.
+
+CI (`.github/workflows/ci.yml`) splits this deliberately:
+
+- **`verify`** runs `typecheck` + `test:offline`. Deterministic, so it gates merges.
+- **`feeds`** runs the live half. It is `continue-on-error` on pull requests — a
+  third-party outage is not a contributor's problem — and on the **daily schedule**
+  it retries once and then opens (or comments on) a `feed-canary` issue. That
+  nightly run is the point: it is how you learn a roster API moved before your
+  users do.
 
 Neither check touches the DOM, so this manual smoke list still matters. Run it
 over http with devtools open — the console must stay clean:
