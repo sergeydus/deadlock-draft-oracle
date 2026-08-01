@@ -20,7 +20,14 @@ import { dirname, join } from 'node:path';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const src = readFileSync(join(root, 'app.js'), 'utf8');
+const css = readFileSync(join(root, 'styles.css'), 'utf8');
 const offline = process.argv.includes('--offline');
+
+/**
+ * The only hero portrait size either feed ships. The boxes that display it are
+ * sized to this ratio; the live-feed section asserts upstream still matches.
+ */
+const ART = { w: 280, h: 380 };
 
 function slice(startMarker, endMarker) {
   const start = src.indexOf(startMarker);
@@ -255,6 +262,38 @@ check('aliasesFrom returns empty for a nameless entry', app.aliasesFrom({}) === 
 check('cssUrl escapes double quotes', app.cssUrl('a"b') === 'url("a\\"b")', app.cssUrl('a"b'));
 check('cssUrl escapes backslashes', app.cssUrl('a\\b') === 'url("a\\\\b")', app.cssUrl('a\\b'));
 
+/* ── Art boxes vs the art's real shape ──
+   Portraits have twice been cropped by a box shaped nothing like the source, so
+   the coupling is asserted rather than left to eyeballing. */
+section('art layout');
+
+function cssRule(selector) {
+  const start = css.indexOf(`${selector} {`);
+  if (start < 0) throw new Error(`styles.css has no "${selector}" rule — update scripts/verify.mjs`);
+  return css.slice(start, css.indexOf('}', start));
+}
+function cssAspect(selector) {
+  const match = cssRule(selector).match(/aspect-ratio:\s*([\d.]+)\s*\/\s*([\d.]+)/);
+  return match ? Number(match[1]) / Number(match[2]) : null;
+}
+
+const artRatio = ART.w / ART.h;
+const stageRatio = cssAspect('.hero-art');
+check('.hero-art is shaped exactly like the portrait', stageRatio !== null && Math.abs(stageRatio - artRatio) < 1e-9,
+  stageRatio === null ? 'no aspect-ratio declared' : stageRatio.toFixed(4));
+// `cover` crops the overflow, so a card far from the art's ratio throws the
+// character away — which is exactly how the roster ended up showing only heads.
+const cardRatio = cssAspect('.hero-card');
+check('.hero-card is close enough to the portrait ratio to keep the character',
+  cardRatio !== null && Math.abs(cardRatio / artRatio - 1) <= 0.15,
+  cardRatio === null ? 'no aspect-ratio declared' : `${cardRatio.toFixed(2)} vs art ${artRatio.toFixed(2)} (${((cardRatio / artRatio - 1) * 100).toFixed(0)}% off, crops ${((1 - artRatio / cardRatio) * 100).toFixed(0)}% of the height)`);
+// Art below ~.35 opacity disappears into the card background; dark clothing goes
+// first, so only faces read.
+for (const [selector, floor] of [['.card-art', 0.4], ['.slot-art', 0.4]]) {
+  const opacity = Number(cssRule(selector).match(/opacity:\s*([\d.]+)/)?.[1] ?? 0);
+  check(`${selector} is opaque enough for the character to read`, opacity >= floor, `opacity ${opacity}`);
+}
+
 /* ── Live feeds through the shipped parser ── */
 
 const parsed = {};
@@ -339,18 +378,17 @@ if (offline) {
       Boolean(alias) && /[^\x00-\x7f]/.test(alias.aliases) && alias.aliases.includes('infernus'),
       alias ? `${alias.aliases.split(' ').length} tokens` : 'inferno not found');
 
-    // The stage art box is sized to this ratio in styles.css.
-    section('hero art');
-    const sample = merged.filter((h) => h.released).slice(0, 5);
+    // The art boxes checked above are sized to ART; confirm upstream still ships it.
+    section('upstream art dimensions');
     const sizes = [];
-    for (const { image } of sample) {
+    for (const { image } of merged.filter((h) => h.released).slice(0, 5)) {
       const res = await fetch(image, { headers: { Range: 'bytes=0-1023' }, signal: AbortSignal.timeout(20000) });
       const buf = Buffer.from(await res.arrayBuffer());
       const isPng = buf.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
       sizes.push(isPng ? `${buf.readUInt32BE(16)}x${buf.readUInt32BE(20)}` : 'not-png');
     }
-    check('hero art is still the 280x380 portrait styles.css is sized for',
-      sizes.every((size) => size === '280x380'), sizes.join(' '));
+    check(`hero art is still the ${ART.w}x${ART.h} portrait the CSS is sized for`,
+      sizes.every((size) => size === `${ART.w}x${ART.h}`), sizes.join(' '));
   }
 }
 
