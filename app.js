@@ -359,12 +359,17 @@ function toast(message) {
 let artToken = 0;
 function setStageArt(url) {
   const token = ++artToken;
-  const clear = () => { els.art.style.backgroundImage = ''; els.art.style.opacity = '.1'; };
+  const clear = () => {
+    els.art.style.backgroundImage = '';
+    els.art.classList.add('is-empty'); // shows the placeholder glow
+    els.art.style.opacity = '.1';
+  };
   if (!url) { clear(); return; }
   const img = new Image();
   img.decoding = 'async';
   img.onload = () => {
     if (token !== artToken) return;
+    els.art.classList.remove('is-empty');
     els.art.style.backgroundImage = cssUrl(url);
     els.art.style.opacity = '.55';
   };

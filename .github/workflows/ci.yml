@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  schedule:
+    # Daily. The live-feed half of `npm test` is an upstream canary: the roster
+    # APIs are community-run and have moved endpoints without notice before.
+    - cron: '17 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Types and draw logic
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm run typecheck
+      # Deterministic half only, so this job gates merges without depending on
+      # anyone else's uptime.
+      - run: npm run test:offline
+
+  feeds:
+    name: Live hero feeds
+    runs-on: ubuntu-latest
+    # Never blocks a pull request: if deadlock.io is down that is not the
+    # contributor's problem. The scheduled run is what you actually watch.
+    continue-on-error: ${{ github.event_name == 'pull_request' }}
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      # Retried once: a single transient network blip should not open an issue.
+      - name: Verify feeds through the shipped parser
+        run: npm test || (sleep 30 && npm test)
+
+      - name: Report a broken feed
+        if: failure() && github.event_name == 'schedule'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const label = 'feed-canary';
+            const title = 'Nightly hero-feed check is failing';
+            const body = [
+              '`npm test` failed on the scheduled run, twice in a row.',
+              'A hero feed has most likely changed shape, moved, or gone down.',
+              '',
+              `[Run log](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})`,
+              '',
+              'See the *Verifying a change* section of AGENTS.md.',
+            ].join('\n');
+            const { data: open } = await github.rest.issues.listForRepo({
+              ...context.repo, state: 'open', labels: label,
+            });
+            if (open.length) {
+              await github.rest.issues.createComment({ ...context.repo, issue_number: open[0].number, body });
+            } else {
+              await github.rest.issues.create({ ...context.repo, title, body, labels: [label] });
+            }

@@ -132,6 +132,18 @@ documented with a JSDoc typedef — update that typedef when you add a field.
 - **Role coverage draws** (`drawSquad`) visit roles in random order and shuffle the
   result, so a squad smaller than the role count does not always favour the same
   roles and the featured hero is not always the first role drawn.
+- **Every box showing hero art is shaped to the art's real 280x380 ratio.** That
+  is the only portrait size either feed ships, and the characters fill the canvas
+  (measured: 90–98% of the height), so there is no padding to absorb a mismatch —
+  a box of the wrong shape makes `background-size: cover` throw the character
+  away. Both bugs here came from that: `.hero-art` was a 400x350 landscape box
+  with a vertical mask that erased the top 18% and bottom 22%, and `.hero-card`
+  was 116x94, which cropped ~40% of every portrait down to a head.
+  `.hero-art`'s mask is now radial so the card's rectangular edges dissolve on all
+  four sides. **`npm test` guards this**: it checks the CSS ratios against the art
+  ratio, checks the art opacities are above the floor where dark clothing vanishes
+  into the background, and checks upstream is still 280x380. If that last one
+  fails, restyle the boxes.
 - **Two `localStorage` keys**: `draftOracle_v1` (settings/history) and
   `draftOracle_v1_roster` (the offline roster cache). Reading either can throw in
   private mode — every access is already wrapped.
@@ -146,9 +158,18 @@ npm run typecheck   # TypeScript over the JSDoc annotations; no TS files, no emi
 
 `scripts/verify.mjs` cannot `import` from `app.js` (no module system), so it
 **slices the pure sections out of the real source** by their `/* ── Section ── */`
-markers and runs them in Node. If you rename a marker, update the slice bounds —
-it throws rather than testing less. The network half doubles as an upstream canary:
-it is what caught `deadlock-api.com` moving its heroes endpoint.
+markers and runs them in Node against stub `state` / `els` objects. If you rename
+a marker or move a function across one, update the slice bounds — it throws rather
+than testing less.
+
+CI (`.github/workflows/ci.yml`) splits this deliberately:
+
+- **`verify`** runs `typecheck` + `test:offline`. Deterministic, so it gates merges.
+- **`feeds`** runs the live half. It is `continue-on-error` on pull requests — a
+  third-party outage is not a contributor's problem — and on the **daily schedule**
+  it retries once and then opens (or comments on) a `feed-canary` issue. That
+  nightly run is the point: it is how you learn a roster API moved before your
+  users do.
 
 Neither check touches the DOM, so this manual smoke list still matters. Run it
 over http with devtools open — the console must stay clean:

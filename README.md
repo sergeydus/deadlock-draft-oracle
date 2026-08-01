@@ -39,8 +39,13 @@ There is no build step and no runtime dependencies: `index.html`, `app.js` and
 
 ```bash
 npm test            # exercises the feed parser and draw logic against the live APIs
+npm run test:offline  # just the deterministic half
 npm run typecheck   # type-checks app.js through its JSDoc annotations
 ```
+
+CI runs the deterministic checks on every pull request, and the live-feed checks
+nightly — the roster APIs are community-run, so that scheduled run is an early
+warning that one has changed shape or moved.
 
 ## Contributing
 

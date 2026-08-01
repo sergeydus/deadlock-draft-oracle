@@ -200,20 +200,34 @@ button {
 .hero-art {
   position: absolute;
   z-index: -1;
-  width: 400px;
-  height: 350px;
-  max-width: 65vw;
+  /* Both feeds only ship a 280x380 portrait card, so the box matches that ratio.
+     It used to be a 400x350 landscape box, which left `contain` shrinking the
+     art into dead space that the mask then ate into. */
+  top: 50%;
+  left: 50%;
+  width: min(300px, 58vw);
+  aspect-ratio: 280 / 380;
+  transform: translate(-50%, -50%);
   opacity: .55;
   background-position: center;
   background-repeat: no-repeat;
   background-size: contain;
   filter: grayscale(.35) contrast(1.1);
-  mask-image: linear-gradient(to bottom, transparent, black 18%, black 78%, transparent);
+  /* Radial, so the card's own rectangular edges dissolve on all four sides. The
+     old vertical-only gradient faded the top 18% and bottom 22% of the box,
+     which cut the hero's head and feet off. */
+  -webkit-mask-image: radial-gradient(ellipse 80% 84% at 50% 46%, #000 62%, transparent 100%);
+  mask-image: radial-gradient(ellipse 80% 84% at 50% 46%, #000 62%, transparent 100%);
   transition: background-image .35s ease, opacity .2s ease;
 }
 
-.hero-art:empty {
-  background: radial-gradient(ellipse, rgba(217, 240, 88, .17), transparent 65%);
+/* This was `.hero-art:empty`, which matched *always* — the div never has
+   children — and used the `background` shorthand, which resets repeat, size and
+   position. Since JS only sets `background-image` inline, the portrait was left
+   tiling at its natural size from the top-left corner. Toggle a class from JS
+   instead, and set the longhand so nothing else is reset. */
+.hero-art.is-empty {
+  background-image: radial-gradient(ellipse, rgba(217, 240, 88, .17), transparent 65%);
 }
 
 .eyebrow, .micro-heading {
@@ -307,10 +321,13 @@ button {
 }
 
 .slot-main {
-  display: block;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
   width: 100%;
+  /* Tall enough to show a face rather than a scalp. */
+  min-height: 98px;
   padding: 9px 26px 9px 9px;
-  min-height: 62px;
   text-align: left;
   color: var(--ink);
   background: transparent;
@@ -320,14 +337,23 @@ button {
 .slot-art {
   position: absolute;
   inset: 0;
-  z-index: -1;
-  opacity: .22;
+  z-index: -2;
+  opacity: .5;
   background-size: cover;
   background-position: center top;
 }
 
 .squad-slot.featured .slot-art {
-  opacity: .34;
+  opacity: .68;
+}
+
+.squad-slot::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background: linear-gradient(to top, rgba(16, 17, 22, .93) 0, rgba(16, 17, 22, .45) 40%, transparent 72%);
 }
 
 .slot-index {
@@ -727,14 +753,32 @@ kbd {
 
 .hero-card {
   position: relative;
+  isolation: isolate;
   overflow: hidden;
-  min-height: 94px;
+  /* Near the art's own 280x380 (0.74) ratio, so `cover` crops only a sliver off
+     the bottom. The old 116x94 box was landscape and threw away ~40% of every
+     character, leaving just a head. */
+  aspect-ratio: 4 / 5;
+  min-height: 118px; /* floor for browsers without aspect-ratio */
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
   text-align: left;
   padding: 10px;
   color: var(--ink);
   border: 1px solid var(--line);
   background: #202228;
   transition: .15s;
+}
+
+/* Scrim, so the name stays legible now that the art behind it is not faint. */
+.hero-card::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  background: linear-gradient(to top, rgba(16, 17, 22, .93) 0, rgba(16, 17, 22, .5) 34%, transparent 68%);
 }
 
 .hero-card:hover {
@@ -759,22 +803,26 @@ kbd {
 .card-art {
   position: absolute;
   inset: 0;
-  opacity: .25;
+  z-index: 0;
+  /* Was .25, which left the characters' dark clothing indistinguishable from the
+     card background — only faces read. The scrim above keeps the name legible. */
+  opacity: .62;
   background-size: cover;
   background-position: center top;
 }
 
 .card-name, .card-state {
   position: relative;
+  z-index: 2;
   display: block;
 }
 
 .card-name {
-  margin-top: 48px;
   text-transform: uppercase;
   font-size: 12px;
   letter-spacing: -.02em;
   font-weight: 700;
+  text-shadow: 0 1px 4px rgba(0, 0, 0, .8);
 }
 
 .card-state {
@@ -888,7 +936,7 @@ kbd {
   }
 
   .hero-art {
-    width: 330px;
+    width: min(240px, 62vw);
   }
 
   .squad-slot {
