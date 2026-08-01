@@ -217,6 +217,18 @@ check('hasRoleData detects roles', app.hasRoleData());
 reset(rolelessPool);
 check('hasRoleData is false when the merge found none', !app.hasRoleData());
 
+// Roles only exist after the enrichment pass. A role filter saved from a healthy
+// session must not apply on a later one where enrichment failed: it would match
+// nothing, and the role chips are hidden in that state, so the user would be
+// stranded on "No hero left" with no control to clear it.
+reset(rolelessPool);
+app.state.filters.roles = new Set(['assassin']);
+check('a saved role filter is ignored when no role data arrived',
+  app.eligibleHeroes().length === rolelessPool.length, `${app.eligibleHeroes().length}/${rolelessPool.length} still eligible`);
+reset(mixed);
+app.state.filters.roles = new Set(['assassin']);
+check('but it still applies once roles are present', ids().join(',') === 'complex', ids().join(', '));
+
 reset(mixed);
 app.state.recent = [mixed[0], mixed[2]];
 check('poolFor relaxes avoid-recent rather than starving a draw',

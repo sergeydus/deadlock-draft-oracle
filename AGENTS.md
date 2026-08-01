@@ -80,9 +80,12 @@ documented with a JSDoc typedef — update that typedef when you add a field.
 1. **`state` is the only source of truth.** `render()` derives every visible
    surface from it and never mutates it. Event handlers mutate `state`, then call
    `render()`.
-2. **The roster grid is built once** by `buildRoster()` per roster load.
-   `syncRosterState()` and `applySearch()` only toggle classes and `hidden` on
-   existing cards. Never rebuild the grid on a keystroke or a toggle.
+2. **The roster grid is built once** by `buildRoster()` per roster load, which
+   creates *empty* cards. All per-hero content — name, art, search index, state
+   classes — is written by `syncRosterState()` on every render, because the
+   enrichment pass fills in `aliases` and missing `image` values *after* the grid
+   exists. Never bake hero data in at build time, and never rebuild the grid on a
+   keystroke or a toggle.
 3. **Feed parsing is defensive.** The two sources return different shapes and both
    change without notice, so `unwrap()` / `normalise()` / `imageFrom()` tolerate
    missing or renamed fields and return `null`/`''` rather than throwing. Keep it
@@ -129,6 +132,12 @@ documented with a JSDoc typedef — update that typedef when you add a field.
   role controls stay hidden until enrichment supplies roles, so the filter can
   never silently empty the pool. `npm test` fails if more than two released
   heroes lose their role.
+- **A saved role filter outlives the data it needs.** Roles only arrive from
+  enrichment, so a filter persisted from a healthy session would match nothing on
+  a session where enrichment failed — and the chips are hidden then, leaving no
+  way to clear it. `eligibleHeroes()` therefore ignores the role filter unless
+  `hasRoleData()` is true. Any future filter fed by enrichment-only data needs the
+  same guard.
 - **Role coverage draws** (`drawSquad`) visit roles in random order and shuffle the
   result, so a squad smaller than the role count does not always favour the same
   roles and the featured hero is not always the first role drawn.
