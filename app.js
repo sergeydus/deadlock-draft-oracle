@@ -393,13 +393,17 @@ function reconcileRestoredState() {
 function eligibleHeroes({ ignoreRecent = false } = {}) {
   const avoid = !ignoreRecent && els.recentToggle.checked ? new Set(state.recent.map((hero) => hero.id)) : new Set();
   const { complexity, roles } = state.filters;
+  // A saved role filter outlives the data it depends on: roles only arrive from
+  // the enrichment pass, so if that fails (offline, or the other feed is down)
+  // no hero has one. Applying the filter then empties the pool — and the role
+  // chips are hidden in that state, so there is no control left to clear it.
+  const roleFilter = roles.size && hasRoleData() ? roles : null;
   return state.heroes.filter((hero) => (!els.releasedToggle.checked || hero.released)
     && !state.excluded.has(hero.id)
     && !avoid.has(hero.id)
-    // An unrated hero is never filtered out by complexity; a role filter is only
-    // offered once role data has actually arrived, so it can demand a match.
+    // An unrated hero is never filtered out by complexity.
     && (!hero.complexity || complexity.has(hero.complexity))
-    && (!roles.size || roles.has(hero.role)));
+    && (!roleFilter || roleFilter.has(hero.role)));
 }
 
 /** True once any hero has a role, i.e. the enrichment pass found role data. */
@@ -614,7 +618,10 @@ function renderTally() {
   els.tallyList.append(frag);
 }
 
-/** Rebuild the roster grid. Only call this when the roster itself changes. */
+/**
+ * Create the grid's cards. Only call this when the roster itself changes; the
+ * per-hero content is filled in by syncRosterState so that it stays current.
+ */
 function buildRoster() {
   cardIndex.clear();
   els.grid.replaceChildren();
@@ -622,9 +629,6 @@ function buildRoster() {
   for (const hero of state.heroes) {
     const card = els.cardTemplate.content.firstElementChild.cloneNode(true);
     card.dataset.heroId = hero.id;
-    card.dataset.search = `${hero.name.toLowerCase()} ${hero.aliases}`;
-    if (hero.image) card.querySelector('.card-art').style.backgroundImage = cssUrl(hero.image);
-    card.querySelector('.card-name').textContent = hero.name;
     cardIndex.set(hero.id, card);
     frag.append(card);
   }
@@ -632,7 +636,13 @@ function buildRoster() {
   els.grid.append(frag);
 }
 
-/** Repaint card classes/labels in place — no DOM construction. */
+/**
+ * Repaint every card in place — no DOM construction.
+ *
+ * This owns the search index and the art too, not just the state classes: the
+ * enrichment pass fills in `aliases` and any missing `image` *after* the grid is
+ * built, and baking those in at build time meant they never reached the cards.
+ */
 function syncRosterState() {
   const recent = new Set(state.recent.map((hero) => hero.id));
   const drawn = new Set(state.squad.map((hero) => hero.id));
@@ -644,8 +654,13 @@ function syncRosterState() {
     card.classList.toggle('recent', recent.has(hero.id));
     card.classList.toggle('drawn', drawn.has(hero.id));
     card.setAttribute('aria-pressed', excluded ? 'true' : 'false');
+    card.querySelector('.card-name').textContent = hero.name;
     card.querySelector('.card-state').textContent = excluded ? 'EXCLUDED' : drawn.has(hero.id) ? 'DRAWN' : recent.has(hero.id) ? 'RECENT' : !hero.released ? 'TEST' : '';
     card.title = excluded ? `Include ${hero.name}` : `Exclude ${hero.name}`;
+    card.dataset.search = `${hero.name.toLowerCase()} ${hero.aliases}`;
+    const art = /** @type {HTMLElement} */ (card.querySelector('.card-art'));
+    const image = hero.image ? cssUrl(hero.image) : '';
+    if (art.style.backgroundImage !== image) art.style.backgroundImage = image; // avoid needless repaints
   }
 }
 
@@ -654,7 +669,7 @@ function applySearch() {
   const query = els.search.value.trim().toLowerCase();
   let visible = 0;
   for (const card of cardIndex.values()) {
-    const match = !query || card.dataset.search.includes(query);
+    const match = !query || (card.dataset.search || '').includes(query);
     card.hidden = !match;
     if (match) visible++;
   }
@@ -741,9 +756,10 @@ async function fetchJson(url, timeoutMs = FETCH_TIMEOUT_MS) {
  * what makes this merge possible. Best-effort — a failure here costs a filter or
  * a colour, never the roster.
  * @param {string} baseSourceName The source that supplied the roster already loaded.
+ * @param {Set<string>} [skip] Sources that just failed; no point asking again.
  */
-async function enrichRoster(baseSourceName) {
-  for (const source of SOURCES.filter((candidate) => candidate.name !== baseSourceName)) {
+async function enrichRoster(baseSourceName, skip = new Set()) {
+  for (const source of SOURCES.filter((candidate) => candidate.name !== baseSourceName && !skip.has(candidate.name))) {
     try {
       const extras = new Map();
       for (const [index, entry] of unwrap(await fetchJson(source.url)).entries()) {
@@ -789,6 +805,7 @@ async function getLiveHeroes() {
   els.roll.disabled = true;
   sourceStatus('Syncing live roster…');
   let lastError;
+  const failed = new Set();
   try {
     for (const source of SOURCES) {
       try {
@@ -805,10 +822,11 @@ async function getLiveHeroes() {
         sourceStatus(`Live roster · ${source.name}`, 'live');
         // Deliberately not awaited: the first draw should not wait on metadata
         // that only enables filters and colour.
-        void enrichRoster(source.name);
+        void enrichRoster(source.name, failed);
         return;
       } catch (error) {
         lastError = error;
+        failed.add(source.name);
       }
     }
 
@@ -921,6 +939,14 @@ els.releasedToggle.addEventListener('change', () => { render(); saveState(); });
 els.search.addEventListener('input', applySearch);
 els.clear.addEventListener('click', () => { state.recent = []; render(); saveState(); });
 els.clearTally.addEventListener('click', () => { state.tally = {}; state.pickCount = 0; render(); saveState(); });
+
+// writeHash() uses replaceState, which does not fire this — so a hashchange is
+// always the user's doing: pasting a share link into an already-open tab, or
+// navigating back to one.
+window.addEventListener('hashchange', () => {
+  const shared = readSharedDraw();
+  if (shared.length) commitDraw(shared, { record: false });
+});
 
 document.addEventListener('keydown', (event) => {
   if (event.code !== 'Space' || event.ctrlKey || event.metaKey || event.altKey) return;
