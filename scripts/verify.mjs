@@ -267,10 +267,20 @@ check('cssUrl escapes backslashes', app.cssUrl('a\\b') === 'url("a\\\\b")', app.
    the coupling is asserted rather than left to eyeballing. */
 section('art layout');
 
+const bareCss = css.replace(/\/\*[\s\S]*?\*\//g, ''); // comments mention selectors too
+
 function cssRule(selector) {
-  const start = css.indexOf(`${selector} {`);
+  const start = bareCss.indexOf(`${selector} {`);
   if (start < 0) throw new Error(`styles.css has no "${selector}" rule — update scripts/verify.mjs`);
-  return css.slice(start, css.indexOf('}', start));
+  return bareCss.slice(start, bareCss.indexOf('}', start));
+}
+/** Every rule whose selector mentions `.className`, as {selector, body}. */
+function rulesFor(className) {
+  const found = [];
+  const pattern = new RegExp(`([^{}]*\\.${className}\\b[^{}]*)\\{([^}]*)\\}`, 'g');
+  let match;
+  while ((match = pattern.exec(bareCss))) found.push({ selector: match[1].trim().replace(/\s+/g, ' '), body: match[2] });
+  return found;
 }
 function cssAspect(selector) {
   const match = cssRule(selector).match(/aspect-ratio:\s*([\d.]+)\s*\/\s*([\d.]+)/);
@@ -293,6 +303,19 @@ for (const [selector, floor] of [['.card-art', 0.4], ['.slot-art', 0.4]]) {
   const opacity = Number(cssRule(selector).match(/opacity:\s*([\d.]+)/)?.[1] ?? 0);
   check(`${selector} is opaque enough for the character to read`, opacity >= floor, `opacity ${opacity}`);
 }
+
+// JS sets `background-image` inline on these, so any rule that reaches them with
+// the `background` SHORTHAND silently resets repeat/size/position and the
+// portrait tiles at natural size from the top-left. That is exactly what
+// `.hero-art:empty { background: … }` did — and because the div is always empty,
+// it always applied.
+for (const className of ['hero-art', 'card-art', 'slot-art']) {
+  const offenders = rulesFor(className).filter(({ body }) => /(?:^|[;])\s*background\s*:/.test(body));
+  check(`no rule on .${className} uses the background shorthand`, offenders.length === 0,
+    offenders.map((rule) => rule.selector).join(' / ') || 'longhands only');
+}
+check('.hero-art disables background tiling', /background-repeat:\s*no-repeat/.test(cssRule('.hero-art')));
+check('.hero-art scales the portrait to fit', /background-size:\s*contain/.test(cssRule('.hero-art')));
 
 /* ── Live feeds through the shipped parser ── */
 
@@ -380,17 +403,25 @@ if (offline) {
 
     // The art boxes checked above are sized to ART; confirm upstream still ships it.
     section('upstream art dimensions');
+    // One flaky image request should not fail the run; only a real size change
+    // (or a total outage) should.
     const sizes = [];
     for (const { image } of merged.filter((h) => h.released).slice(0, 5)) {
-      const res = await fetch(image, { headers: { Range: 'bytes=0-1023' }, signal: AbortSignal.timeout(20000) });
-      const buf = Buffer.from(await res.arrayBuffer());
-      const isPng = buf.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
-      sizes.push(isPng ? `${buf.readUInt32BE(16)}x${buf.readUInt32BE(20)}` : 'not-png');
+      try {
+        const res = await fetch(image, { headers: { Range: 'bytes=0-1023' }, signal: AbortSignal.timeout(20000) });
+        const buf = Buffer.from(await res.arrayBuffer());
+        const isPng = buf.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+        sizes.push(isPng ? `${buf.readUInt32BE(16)}x${buf.readUInt32BE(20)}` : 'not-png');
+      } catch (_) { /* skipped, see below */ }
     }
     check(`hero art is still the ${ART.w}x${ART.h} portrait the CSS is sized for`,
-      sizes.every((size) => size === `${ART.w}x${ART.h}`), sizes.join(' '));
+      sizes.length > 0 && sizes.every((size) => size === `${ART.w}x${ART.h}`),
+      sizes.length ? `${sizes.join(' ')}${sizes.length < 5 ? ` (${5 - sizes.length} unreachable)` : ''}` : 'no art reachable');
   }
 }
 
 console.log(failures ? `\n${failures} check(s) failed` : '\nall checks passed');
-process.exit(failures ? 1 : 0);
+// Setting exitCode rather than calling process.exit(): an abrupt exit while
+// keep-alive sockets are still open trips a libuv assertion on Windows, which
+// would mask the real result.
+process.exitCode = failures ? 1 : 0;

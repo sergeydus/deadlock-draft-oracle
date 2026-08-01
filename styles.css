@@ -221,8 +221,13 @@ button {
   transition: background-image .35s ease, opacity .2s ease;
 }
 
-.hero-art:empty {
-  background: radial-gradient(ellipse, rgba(217, 240, 88, .17), transparent 65%);
+/* This was `.hero-art:empty`, which matched *always* — the div never has
+   children — and used the `background` shorthand, which resets repeat, size and
+   position. Since JS only sets `background-image` inline, the portrait was left
+   tiling at its natural size from the top-left corner. Toggle a class from JS
+   instead, and set the longhand so nothing else is reset. */
+.hero-art.is-empty {
+  background-image: radial-gradient(ellipse, rgba(217, 240, 88, .17), transparent 65%);
 }
 
 .eyebrow, .micro-heading {
