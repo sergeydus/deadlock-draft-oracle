@@ -9,13 +9,12 @@ export const TopBar = observer(function TopBar() {
         <span className="brand-mark">D</span>
         <span>Draft Oracle</span>
       </a>
-      <div className={classes('source-status', store.statusKind)} id="sourceStatus" aria-live="polite">
+      <div className={classes('source-status', store.statusKind)} aria-live="polite">
         <span className="status-dot" />
         <span>{store.statusMessage}</span>
       </div>
       <button
         className="icon-button"
-        id="refreshButton"
         type="button"
         title="Refresh live roster"
         aria-label="Refresh live roster"
@@ -25,14 +24,5 @@ export const TopBar = observer(function TopBar() {
         ↻
       </button>
     </header>
-  );
-});
-
-export const Toast = observer(function Toast() {
-  if (!store.toastMessage) return null;
-  return (
-    <div className={classes('toast', store.toastVisible && 'visible')} id="toast" role="status" aria-live="polite">
-      {store.toastMessage}
-    </div>
   );
 });

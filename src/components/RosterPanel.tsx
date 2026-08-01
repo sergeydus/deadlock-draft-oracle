@@ -32,12 +32,11 @@ export const RosterPanel = observer(function RosterPanel() {
       <div className="section-heading roster-heading">
         <div>
           <p className="eyebrow">LIVE HERO ROSTER</p>
-          <h2 id="rosterTitle">{store.heroes.length} heroes detected</h2>
+          <h2>{store.heroes.length} heroes detected</h2>
         </div>
         <div className="search-box">
           <span aria-hidden="true">⌕</span>
           <input
-            id="searchInput"
             type="search"
             placeholder="Search heroes"
             aria-label="Search heroes"
@@ -46,7 +45,7 @@ export const RosterPanel = observer(function RosterPanel() {
           />
         </div>
       </div>
-      <div id="rosterGrid" className="roster-grid" aria-live="polite">
+      <div className="roster-grid" aria-live="polite">
         {heroes.map((hero) => <HeroCard hero={hero} key={hero.id} />)}
         {!heroes.length && store.heroes.length > 0 && (
           <p className="empty-roster">No hero matches that signal.</p>

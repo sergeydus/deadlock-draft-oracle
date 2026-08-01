@@ -10,7 +10,7 @@ export const SquadStrip = observer(function SquadStrip() {
   if (store.squad.length < 2) return null;
 
   return (
-    <div className="squad-strip" id="squadStrip" role="group" aria-label="Squad draw">
+    <div className="squad-strip" role="group" aria-label="Squad draw">
       {store.squad.map((hero, index) => (
         <div className={classes('squad-slot', index === store.featured && 'featured')} key={`${index}-${hero.id}`}>
           <button

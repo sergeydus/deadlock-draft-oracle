@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type CSSProperties } from 'react';
 import { observer } from 'mobx-react-lite';
 import { store } from '../store/OracleStore.ts';
 import { NO_DESCRIPTION } from '../constants.ts';
@@ -27,7 +27,6 @@ const StageArt = observer(function StageArt({ url }: { url: string }) {
   return (
     <div
       className={classes('hero-art', !ready && 'is-empty')}
-      id="heroArt"
       aria-hidden="true"
       style={{ backgroundImage: ready ? cssUrl(ready) : undefined, opacity: ready ? 0.55 : 0.1 }}
     />
@@ -42,7 +41,7 @@ const HeroTags = observer(function HeroTags() {
     : [];
   if (!tags.length) return null;
   return (
-    <p className="hero-tags" id="heroTags">
+    <p className="hero-tags">
       {tags.map((tag) => <span className="hero-tag" key={tag}>{tag}</span>)}
     </p>
   );
@@ -84,35 +83,38 @@ export const HeroStage = observer(function HeroStage() {
   const hero = store.featuredHero;
   const copy = stageCopy();
   const drawn = store.mode === 'draw' && hero !== null;
+  // The ambient blobs read this custom property; empty falls back to the
+  // literals in styles.css.
+  const accentStyle = { '--hero-accent': hero?.accent || '' } as CSSProperties;
 
   return (
     <section
       className="hero-stage"
       aria-labelledby="pickedLabel"
-      style={{ ['--hero-accent' as string]: hero?.accent || '' }}
+      style={accentStyle}
     >
       <div className="ambient ambient-one" />
       <div className="ambient ambient-two" />
       <div className="scanlines" />
       <div className="eyebrow" id="pickedLabel">THE ORACLE CHOOSES</div>
       <StageArt url={drawn ? hero.image : ''} />
-      <p className="hero-number" id="heroNumber">{copy.number}</p>
+      <p className="hero-number">{copy.number}</p>
       {/* Keyed on the draw so the reveal animation restarts even when the same
           hero is drawn twice in a row. */}
-      <h1 id="heroName" className={drawn ? 'rolling' : undefined} key={store.drawId}>{copy.title}</h1>
-      <p className="hero-description" id="heroDescription" title={hero?.description || ''}>{copy.description}</p>
+      <h1 className={drawn ? 'rolling' : undefined} key={store.drawId}>{copy.title}</h1>
+      <p className="hero-description" title={hero?.description || ''}>{copy.description}</p>
       <HeroTags />
 
       <SquadStrip />
 
       <div className="pick-controls">
-        <button className="primary-button" id="rollButton" type="button" disabled={!store.heroes.length} onClick={store.roll}>
-          <span className="dice" aria-hidden="true">✦</span> <span id="rollLabel">{store.rollLabel}</span>
+        <button className="primary-button" type="button" disabled={!store.heroes.length} onClick={store.roll}>
+          <span className="dice" aria-hidden="true">✦</span> <span>{store.rollLabel}</span>
         </button>
-        <button className="secondary-button" id="excludePickedButton" type="button" disabled={!drawn} onClick={store.excludeFeatured}>
+        <button className="secondary-button" type="button" disabled={!drawn} onClick={store.excludeFeatured}>
           Exclude pick
         </button>
-        <button className="secondary-button" id="shareButton" type="button" disabled={!drawn} onClick={store.copyLink}>
+        <button className="secondary-button" type="button" disabled={!drawn} onClick={store.copyLink}>
           Copy draw link
         </button>
       </div>

@@ -57,20 +57,22 @@ export function mergeInto(heroes: Hero[], extras: ReadonlyMap<string, Hero>): bo
 }
 
 /**
- * Fetch the sources that did not supply the roster and merge their metadata in.
+ * Fetch the sources that did not supply the roster, for their metadata.
+ *
+ * Deliberately returns the extras rather than merging them: the caller holds
+ * observable heroes, and mutating those has to happen inside a MobX action.
  * Best-effort — a failure costs a filter or a colour, never the roster.
  * @param skip sources that just failed; no point asking again.
+ * @returns the other feed's heroes by id, or null if none could be reached.
  */
-export async function enrichRoster(
-  heroes: Hero[],
+export async function fetchEnrichment(
   baseSourceName: string,
   skip: ReadonlySet<string> = new Set(),
-): Promise<boolean> {
+): Promise<Map<string, Hero> | null> {
   for (const source of SOURCES.filter((candidate) => candidate.name !== baseSourceName && !skip.has(candidate.name))) {
     try {
-      const extras = new Map(parseRoster(await fetchJson(source.url), source.origin).map((hero) => [hero.id, hero]));
-      return mergeInto(heroes, extras);
+      return new Map(parseRoster(await fetchJson(source.url), source.origin).map((hero) => [hero.id, hero]));
     } catch { /* enrichment is optional – keep the base roster as-is */ }
   }
-  return false;
+  return null;
 }

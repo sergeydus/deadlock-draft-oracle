@@ -3,7 +3,8 @@ import { store } from './store/OracleStore.ts';
 import { HeroStage } from './components/HeroStage.tsx';
 import { RosterPanel } from './components/RosterPanel.tsx';
 import { SettingsPanel } from './components/SettingsPanel.tsx';
-import { TopBar, Toast } from './components/TopBar.tsx';
+import { TopBar } from './components/TopBar.tsx';
+import { Toast } from './components/Toast.tsx';
 
 export function App() {
   useEffect(() => {

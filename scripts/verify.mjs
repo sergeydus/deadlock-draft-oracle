@@ -328,9 +328,10 @@ if (offline) {
       const response = await fetch(source.url, { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(20000) });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const payload = await response.json();
+      const entries = unwrap(payload);
       const heroes = parseRoster(payload, source.origin);
       const released = heroes.filter((h) => h.released);
-      check(`${source.name}: unwrap found entries`, unwrap(payload).length > 0, `${unwrap(payload).length} entries`);
+      check(`${source.name}: unwrap found entries`, entries.length > 0, `${entries.length} entries`);
       check(`${source.name}: parseRoster produced heroes`, heroes.length >= 5, `${heroes.length} heroes`);
       check(`${source.name}: every hero passes isHeroRecord`, heroes.every(isHeroRecord));
       check(`${source.name}: ids are unique`, new Set(heroes.map((h) => h.id)).size === heroes.length);

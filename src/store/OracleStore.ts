@@ -1,10 +1,8 @@
 import { makeAutoObservable, runInAction } from 'mobx';
-import {
-  COMPLEXITY_LEVELS, MAX_SQUAD, RECENT_LIMIT, ROLE_ORDER, SOURCES, TALLY_ROWS,
-} from '../constants.ts';
+import { COMPLEXITY_LEVELS, RECENT_LIMIT, ROLE_ORDER, SOURCES, TALLY_ROWS } from '../constants.ts';
 import { drawFrom, drawSquad, mulberry32, randomSeed, type Rng } from '../lib/random.ts';
 import { eligibleHeroes, hasRoleData, poolFor, type PoolCriteria } from '../lib/pool.ts';
-import { enrichRoster, fetchRoster } from '../lib/roster.ts';
+import { fetchEnrichment, fetchRoster, mergeInto } from '../lib/roster.ts';
 import { copyToClipboard, readSharedDraw, writeHash } from '../lib/share.ts';
 import { loadCachedRoster, loadState, saveCachedRoster, saveState } from '../lib/storage.ts';
 import type { Hero, StatusKind } from '../types.ts';
@@ -211,8 +209,13 @@ export class OracleStore {
   }
 
   private async enrich(baseSourceName: string, failed: ReadonlySet<string>): Promise<void> {
-    const changed = await enrichRoster(this.heroes, baseSourceName, failed);
-    if (changed) saveCachedRoster({ heroes: this.heroes, source: this.source });
+    const extras = await fetchEnrichment(baseSourceName, failed);
+    if (!extras) return;
+    // The merge mutates observable heroes, so it has to run inside an action —
+    // the code after an await is no longer in the enclosing one.
+    runInAction(() => {
+      if (mergeInto(this.heroes, extras)) saveCachedRoster({ heroes: this.heroes, source: this.source });
+    });
   }
 
   private adoptRoster(heroes: Hero[], sourceName: string): void {
@@ -361,4 +364,3 @@ export class OracleStore {
 }
 
 export const store = new OracleStore();
-export { MAX_SQUAD, COMPLEXITY_LEVELS };

@@ -2,7 +2,7 @@ import { observer } from 'mobx-react-lite';
 import { store } from '../store/OracleStore.ts';
 import { COMPLEXITY_LEVELS, MAX_SQUAD } from '../constants.ts';
 import { titleCase } from '../lib/css.ts';
-import { ChipGroup, FilterRow, ToggleRow } from './ChipGroup.tsx';
+import { ChipGroup, FilterRow, ToggleRow } from './Controls.tsx';
 
 const RecentList = observer(function RecentList() {
   return (
@@ -11,7 +11,7 @@ const RecentList = observer(function RecentList() {
         <span>RECENTLY DRAWN</span>
         <button type="button" onClick={store.clearRecent}>Clear</button>
       </div>
-      <div className="recent-list" id="recentList">
+      <div className="recent-list">
         {store.recent.length
           ? store.recent.map((hero) => <span className="recent-chip" key={hero.id}>{hero.name}</span>)
           : <span className="empty-copy">No picks yet. The city is waiting.</span>}
@@ -34,10 +34,10 @@ const DrawLog = observer(function DrawLog() {
         <span>DRAW LOG</span>
         <button type="button" onClick={store.clearTally}>Reset</button>
       </div>
-      <p className="tally-total" id="tallyTotal">
+      <p className="tally-total">
         {store.pickCount} draw{store.pickCount === 1 ? '' : 's'} recorded
       </p>
-      <ol className="tally-list" id="tallyList">
+      <ol className="tally-list">
         {rows.length
           ? rows.map(({ hero, count }) => (
             <li className="tally-row" key={hero.id} title={`${hero.name}: drawn ${count}×`}>
@@ -62,7 +62,7 @@ export const SettingsPanel = observer(function SettingsPanel() {
           <p className="eyebrow">DRAFT SETTINGS</p>
           <h2>Shape the chaos</h2>
         </div>
-        <span className="eligible-count" id="eligibleCount">{store.eligible.length} eligible</span>
+        <span className="eligible-count">{store.eligible.length} eligible</span>
       </div>
 
       <ToggleRow
@@ -82,12 +82,15 @@ export const SettingsPanel = observer(function SettingsPanel() {
         <ChipGroup
           label="Squad size"
           onToggle={(value) => store.setSquadSize(Number(value))}
-          chips={Array.from({ length: MAX_SQUAD }, (_, index) => index + 1).map((size) => ({
-            value: String(size),
-            label: String(size),
-            ariaLabel: size === 1 ? 'Solo draw' : `Squad of ${size}`,
-            active: size === store.squadSize,
-          }))}
+          chips={Array.from({ length: MAX_SQUAD }, (_, index) => {
+            const size = index + 1;
+            return {
+              value: String(size),
+              label: String(size),
+              ariaLabel: size === 1 ? 'Solo draw' : `Squad of ${size}`,
+              active: size === store.squadSize,
+            };
+          })}
         />
       </FilterRow>
 

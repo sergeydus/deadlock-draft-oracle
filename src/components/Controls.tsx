@@ -1,3 +1,5 @@
+import type { ReactNode } from 'react';
+
 export interface Chip {
   value: string;
   label: string;
@@ -33,7 +35,7 @@ export function ChipGroup({ label, chips, onToggle }: {
 export function FilterRow({ title, hint, children }: {
   title: string;
   hint: string;
-  children: React.ReactNode;
+  children: ReactNode;
 }) {
   return (
     <div className="filter-row">
