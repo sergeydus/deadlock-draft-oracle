@@ -1,0 +1,366 @@
+import { makeAutoObservable, runInAction } from 'mobx';
+import { COMPLEXITY_LEVELS, RECENT_LIMIT, ROLE_ORDER, SOURCES, TALLY_ROWS } from '../constants.ts';
+import { drawFrom, drawSquad, mulberry32, randomSeed, type Rng } from '../lib/random.ts';
+import { eligibleHeroes, hasRoleData, poolFor, type PoolCriteria } from '../lib/pool.ts';
+import { fetchEnrichment, fetchRoster, mergeInto } from '../lib/roster.ts';
+import { copyToClipboard, readSharedDraw, writeHash } from '../lib/share.ts';
+import { loadCachedRoster, loadState, saveCachedRoster, saveState } from '../lib/storage.ts';
+import type { Hero, StatusKind } from '../types.ts';
+
+/** What the stage should be showing. */
+export type StageMode = 'loading' | 'draw' | 'empty' | 'offline';
+
+/**
+ * The whole application state.
+ *
+ * Everything the UI shows is either a field here or a computed derived from
+ * one, and observers re-render themselves — there is no repaint step to forget.
+ * That is deliberate: the pre-React version kept a hand-written `render()` plus
+ * twelve sync functions, and its recurring bug was a surface that stopped being
+ * refreshed (enrichment data never reaching the roster cards, for instance).
+ */
+export class OracleStore {
+  heroes: Hero[] = [];
+  /** The current draw. Length 1 for a solo pick, up to MAX_SQUAD for a stack. */
+  squad: Hero[] = [];
+  /** Index into `squad` shown large on the stage. */
+  featured = 0;
+  squadSize = 1;
+  /** Squad draws take one of each role before filling the rest. */
+  coverRoles = false;
+  complexity = new Set<number>(COMPLEXITY_LEVELS);
+  /** Empty means "every role", not "none". */
+  roles = new Set<string>();
+  excluded = new Set<string>();
+  recent: Hero[] = [];
+  /** heroId -> times drawn, lifetime. */
+  tally: Record<string, number> = {};
+  /** Lifetime draws, including every member of a squad draw. */
+  pickCount = 0;
+  avoidRecent = true;
+  releasedOnly = true;
+  search = '';
+  source = '';
+  fetching = false;
+  statusMessage = 'Connecting to live roster…';
+  statusKind: StatusKind = '';
+  /** True when the current draw came from a #squad= link rather than a roll. */
+  shared = false;
+  seed = 0;
+  mode: StageMode = 'loading';
+  /** Bumped on every draw. The stage keys its heading on this so the reveal
+      animation restarts even when the same hero comes up twice. */
+  drawId = 0;
+  toastMessage = '';
+  toastVisible = false;
+
+  private rng: Rng = mulberry32(1);
+  private toastTimer: ReturnType<typeof setTimeout> | undefined;
+
+  constructor() {
+    // The type argument lets the overrides name private fields; both are plain
+    // mutable state that nothing should react to.
+    makeAutoObservable<OracleStore, 'rng' | 'toastTimer'>(this, { rng: false, toastTimer: false }, { autoBind: true });
+    this.restore();
+  }
+
+  /* ── Derived ── */
+
+  get byId(): Map<string, Hero> {
+    return new Map(this.heroes.map((hero) => [hero.id, hero]));
+  }
+
+  private get criteria(): PoolCriteria {
+    return {
+      heroes: this.heroes,
+      excluded: this.excluded,
+      recent: this.recent,
+      complexity: this.complexity,
+      roles: this.roles,
+      avoidRecent: this.avoidRecent,
+      releasedOnly: this.releasedOnly,
+    };
+  }
+
+  get eligible(): Hero[] {
+    return eligibleHeroes(this.criteria);
+  }
+
+  get hasRoleData(): boolean {
+    return hasRoleData(this.heroes);
+  }
+
+  /** Roles actually present in the roster, in canonical order. */
+  get availableRoles(): string[] {
+    return ROLE_ORDER.filter((role) => this.heroes.some((hero) => hero.role === role));
+  }
+
+  /** Role controls only appear once enrichment supplied roles, so the UI never
+      offers a filter that would silently empty the pool. */
+  get showRoleControls(): boolean {
+    return this.availableRoles.length > 1;
+  }
+
+  get featuredHero(): Hero | null {
+    return this.squad[this.featured] ?? null;
+  }
+
+  get visibleRoster(): Hero[] {
+    const query = this.search.trim().toLowerCase();
+    if (!query) return this.heroes;
+    return this.heroes.filter((hero) => `${hero.name.toLowerCase()} ${hero.aliases}`.includes(query));
+  }
+
+  get tallyRows(): { hero: Hero; count: number }[] {
+    const byId = this.byId;
+    return Object.entries(this.tally)
+      .map(([id, count]) => ({ hero: byId.get(id), count }))
+      .filter((row): row is { hero: Hero; count: number } => row.hero !== undefined)
+      .sort((a, b) => b.count - a.count || a.hero.name.localeCompare(b.hero.name))
+      .slice(0, TALLY_ROWS);
+  }
+
+  get stageLabel(): string {
+    const label = this.shared ? 'SHARED DRAW'
+      : this.squad.length > 1 ? `SQUAD OF ${this.squad.length}  ·  DRAW ${String(this.pickCount).padStart(2, '0')}`
+        : `PICK ${String(this.pickCount).padStart(2, '0')}`;
+    return `${label}  ·  ${this.source.toUpperCase()}`;
+  }
+
+  get rollLabel(): string {
+    return this.squadSize > 1 ? `DRAW SQUAD OF ${this.squadSize}` : 'PICK MY HERO';
+  }
+
+  /* ── Persistence ── */
+
+  private restore(): void {
+    const saved = loadState();
+    if (saved.excluded) this.excluded = new Set(saved.excluded);
+    if (saved.recent) this.recent = saved.recent;
+    if (saved.tally) this.tally = saved.tally;
+    if (saved.pickCount !== undefined) this.pickCount = saved.pickCount;
+    if (saved.squadSize !== undefined) this.squadSize = saved.squadSize;
+    if (saved.coverRoles !== undefined) this.coverRoles = saved.coverRoles;
+    if (saved.complexity?.length) this.complexity = new Set(saved.complexity);
+    if (saved.roles) this.roles = new Set(saved.roles);
+    if (saved.avoidRecent !== undefined) this.avoidRecent = saved.avoidRecent;
+    if (saved.releasedOnly !== undefined) this.releasedOnly = saved.releasedOnly;
+  }
+
+  private persist(): void {
+    saveState({
+      excluded: [...this.excluded],
+      recent: [...this.recent],
+      tally: { ...this.tally },
+      pickCount: this.pickCount,
+      squadSize: this.squadSize,
+      coverRoles: this.coverRoles,
+      complexity: [...this.complexity],
+      roles: [...this.roles],
+      avoidRecent: this.avoidRecent,
+      releasedOnly: this.releasedOnly,
+    });
+  }
+
+  /* ── Roster loading ── */
+
+  async load(): Promise<void> {
+    if (this.fetching) return;
+    this.fetching = true;
+    this.setStatus('Syncing live roster…');
+    const failed = new Set<string>();
+    let lastError: unknown;
+    try {
+      for (const source of SOURCES) {
+        try {
+          const heroes = await fetchRoster(source);
+          runInAction(() => {
+            this.adoptRoster(heroes, source.name);
+            this.setStatus(`Live roster · ${source.name}`, 'live');
+          });
+          saveCachedRoster({ heroes, source: source.name });
+          // Deliberately not awaited: the first draw should not wait on metadata
+          // that only enables filters and colour.
+          void this.enrich(source.name, failed);
+          return;
+        } catch (error) {
+          lastError = error;
+          failed.add(source.name);
+        }
+      }
+
+      const cached = this.heroes.length ? null : loadCachedRoster();
+      runInAction(() => {
+        if (cached) {
+          this.adoptRoster(cached.heroes, `${cached.source} (cached)`);
+          this.setStatus(`Cached roster · ${cached.source}`, 'error');
+        } else if (this.heroes.length) {
+          // A failed manual refresh keeps whatever roster is already on screen.
+          this.setStatus('Refresh failed — keeping current roster', 'error');
+        } else {
+          this.setStatus('Live roster unavailable', 'error');
+          this.mode = 'offline';
+        }
+      });
+      if (!cached) console.error('Could not load a hero feed:', lastError);
+    } finally {
+      runInAction(() => { this.fetching = false; });
+    }
+  }
+
+  private async enrich(baseSourceName: string, failed: ReadonlySet<string>): Promise<void> {
+    const extras = await fetchEnrichment(baseSourceName, failed);
+    if (!extras) return;
+    // The merge mutates observable heroes, so it has to run inside an action —
+    // the code after an await is no longer in the enclosing one.
+    runInAction(() => {
+      if (mergeInto(this.heroes, extras)) saveCachedRoster({ heroes: this.heroes, source: this.source });
+    });
+  }
+
+  private adoptRoster(heroes: Hero[], sourceName: string): void {
+    this.heroes = heroes;
+    this.source = sourceName;
+    // Restored ids may name heroes the roster no longer has.
+    const byId = this.byId;
+    this.excluded = new Set([...this.excluded].filter((id) => byId.has(id)));
+    this.recent = this.recent.map((hero) => byId.get(hero.id)).filter((hero): hero is Hero => hero !== undefined).slice(0, RECENT_LIMIT);
+    this.squad = this.squad.map((hero) => byId.get(hero.id)).filter((hero): hero is Hero => hero !== undefined);
+
+    // A shared link wins over a fresh roll so the recipient sees the sender's draw.
+    const shared = readSharedDraw(byId);
+    if (shared.length) this.commitDraw(shared, false);
+    else this.roll();
+  }
+
+  private setStatus(message: string, kind: StatusKind = ''): void {
+    this.statusMessage = message;
+    this.statusKind = kind;
+  }
+
+  /* ── Drawing ── */
+
+  private reseed(): void {
+    this.seed = randomSeed() >>> 0;
+    this.rng = mulberry32(this.seed);
+  }
+
+  private recordDraw(heroes: Hero[]): void {
+    for (const hero of heroes) this.tally[hero.id] = (this.tally[hero.id] || 0) + 1;
+    this.pickCount += heroes.length;
+    const drawn = new Set(heroes.map((hero) => hero.id));
+    this.recent = [...heroes, ...this.recent.filter((hero) => !drawn.has(hero.id))].slice(0, RECENT_LIMIT);
+  }
+
+  /** @param record false for draws restored from a share link. */
+  commitDraw(heroes: Hero[], record = true): void {
+    if (!heroes.length) return;
+    this.squad = heroes;
+    this.featured = 0;
+    this.shared = !record;
+    this.mode = 'draw';
+    this.drawId++;
+    if (record) {
+      this.recordDraw(heroes);
+      this.persist();
+    }
+    writeHash(heroes);
+  }
+
+  roll(): void {
+    if (!this.heroes.length) return;
+    this.reseed();
+    const pool = poolFor(this.squadSize, this.criteria);
+    if (!pool.length) {
+      this.squad = [];
+      this.featured = 0;
+      this.mode = 'empty';
+      return;
+    }
+    this.commitDraw(drawSquad(pool, this.squadSize, { coverRoles: this.coverRoles, rng: this.rng }));
+  }
+
+  /** Reroll a single squad slot, keeping the rest of the stack intact. */
+  rerollSlot(index: number): void {
+    const current = this.squad[index];
+    if (!current) return;
+    this.reseed();
+    const held = new Set(this.squad.filter((_, i) => i !== index).map((hero) => hero.id));
+    let pool = poolFor(this.squad.length, this.criteria).filter((hero) => !held.has(hero.id) && hero.id !== current.id);
+    if (!pool.length) pool = eligibleHeroes({ ...this.criteria, ignoreRecent: true }).filter((hero) => !held.has(hero.id));
+    if (!pool.length) { this.showToast('No other hero is eligible for that slot.'); return; }
+    const [hero] = drawFrom(pool, 1, this.rng);
+    this.squad = this.squad.map((existing, i) => (i === index ? hero : existing));
+    this.featured = index;
+    this.shared = false;
+    this.drawId++;
+    this.recordDraw([hero]);
+    this.persist();
+    writeHash(this.squad);
+  }
+
+  applySharedFromHash(): void {
+    const shared = readSharedDraw(this.byId);
+    if (shared.length) this.commitDraw(shared, false);
+  }
+
+  /* ── User actions ── */
+
+  feature(index: number): void { this.featured = index; }
+
+  excludeFeatured(): void {
+    const hero = this.featuredHero;
+    if (!hero) return;
+    this.excluded.add(hero.id);
+    this.persist();
+    if (this.squad.length > 1) this.rerollSlot(this.featured);
+    else this.roll();
+  }
+
+  toggleExcluded(id: string): void {
+    if (this.excluded.has(id)) this.excluded.delete(id);
+    else this.excluded.add(id);
+    this.persist();
+  }
+
+  setSquadSize(size: number): void { this.squadSize = size; this.persist(); }
+  setCoverRoles(value: boolean): void { this.coverRoles = value; this.persist(); }
+  setAvoidRecent(value: boolean): void { this.avoidRecent = value; this.persist(); }
+  setReleasedOnly(value: boolean): void { this.releasedOnly = value; this.persist(); }
+  setSearch(value: string): void { this.search = value; }
+
+  toggleComplexity(level: number): void {
+    if (this.complexity.has(level)) {
+      // Emptying it entirely would zero the pool.
+      if (this.complexity.size === 1) { this.showToast('Keep at least one level selected.'); return; }
+      this.complexity.delete(level);
+    } else this.complexity.add(level);
+    this.persist();
+  }
+
+  toggleRole(role: string): void {
+    if (this.roles.has(role)) this.roles.delete(role);
+    else this.roles.add(role);
+    this.persist();
+  }
+
+  clearRecent(): void { this.recent = []; this.persist(); }
+  clearTally(): void { this.tally = {}; this.pickCount = 0; this.persist(); }
+
+  async copyLink(): Promise<void> {
+    writeHash(this.squad);
+    const copied = await copyToClipboard(location.href);
+    runInAction(() => {
+      this.showToast(copied ? 'Draw link copied to clipboard.' : 'Copy failed — the link is in your address bar.');
+    });
+  }
+
+  showToast(message: string): void {
+    this.toastMessage = message;
+    this.toastVisible = true;
+    clearTimeout(this.toastTimer);
+    this.toastTimer = setTimeout(() => runInAction(() => { this.toastVisible = false; }), 2200);
+  }
+}
+
+export const store = new OracleStore();
