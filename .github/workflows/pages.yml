@@ -5,10 +5,11 @@ on:
     branches: [master]
   workflow_dispatch:
 
+# Only the deploy job gets the Pages and OIDC scopes (granted on that job below).
+# `build` runs `npm ci`, which executes install scripts from the whole dependency
+# tree, so it is kept to read-only.
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 # One deploy at a time, and never cancel one mid-flight: a cancelled deployment
 # can leave Pages serving a half-uploaded artifact.
@@ -32,15 +33,20 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
       - run: npm ci
+      # Before the build, not after: this step's reason to exist is the
+      # base_url/base_path it exports for a build to consume. Nothing here reads
+      # them — vite.config.ts pins `base: './'`, which resolves correctly from the
+      # /deadlock-draft-oracle/ subpath and from a domain root alike — but a step
+      # placed after the build could not be used that way at all.
+      - uses: actions/configure-pages@v5
+
       # The deterministic half of CI, repeated here so a red master cannot ship.
       # The live-feed checks are deliberately left out: a third-party outage must
       # not block a deploy of code that is fine.
       - run: npm run test:offline
-      # `npm run build` typechecks first. vite.config.ts pins `base: './'`, so the
-      # bundle works from the /deadlock-draft-oracle/ subpath unchanged.
+      # Typechecks first, then bundles into dist/.
       - run: npm run build
 
-      - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist
@@ -49,6 +55,10 @@ jobs:
     name: Deploy
     needs: build
     runs-on: ubuntu-latest
+    # The only two scopes actions/deploy-pages documents as required.
+    permissions:
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
