@@ -5,6 +5,7 @@
   "type": "module",
   "description": "Hero randomizer for Deadlock — solo picks or a full squad of six, from the live community roster feeds.",
   "keywords": ["deadlock", "randomizer", "hero-picker"],
+  "homepage": "https://sergeydus.github.io/deadlock-draft-oracle/",
   "license": "MIT",
   "scripts": {
     "dev": "vite",

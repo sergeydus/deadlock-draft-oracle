@@ -167,3 +167,19 @@ clean):
 8. Reload → exclusions, recents, draw log, squad size and filters all survive.
 9. Offline (devtools → Network → Offline) → refresh → falls back to the cached
    roster instead of hanging.
+
+## Shipping it
+
+Push to `master` and `.github/workflows/pages.yml` builds and publishes to
+GitHub Pages: <https://sergeydus.github.io/deadlock-draft-oracle/>. It reruns
+`test:offline` before building, so a red `master` cannot ship; the live-feed
+checks are excluded on purpose, since an upstream outage must not block a deploy.
+
+The app is served from the repo-name subpath, which is why `vite.config.ts` sets
+`base: './'` — **do not change it to `'/'`**, that breaks every asset URL in
+production while leaving `npm run dev` looking fine. Anything you add that builds
+a URL must stay relative for the same reason.
+
+No 404 fallback is configured and none is needed: navigation state lives in the
+hash (`#squad=…`), so Pages only ever serves `index.html`. Introducing real
+path-based routing would require adding a `404.html` copy of the entry page.

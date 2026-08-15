@@ -1,0 +1,57 @@
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deploy at a time, and never cancel one mid-flight: a cancelled deployment
+# can leave Pages serving a half-uploaded artifact.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+env:
+  # Matches ci.yml — scripts/verify.mjs imports the TypeScript source directly and
+  # relies on native type stripping, unflagged from 23.6.
+  NODE_VERSION: '24'
+
+jobs:
+  build:
+    name: Build site
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      # The deterministic half of CI, repeated here so a red master cannot ship.
+      # The live-feed checks are deliberately left out: a third-party outage must
+      # not block a deploy of code that is fine.
+      - run: npm run test:offline
+      # `npm run build` typechecks first. vite.config.ts pins `base: './'`, so the
+      # bundle works from the /deadlock-draft-oracle/ subpath unchanged.
+      - run: npm run build
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    name: Deploy
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
