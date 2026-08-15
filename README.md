@@ -1,5 +1,7 @@
 # Deadlock Draft Oracle
 
+**[Play it →](https://sergeydus.github.io/deadlock-draft-oracle/)**
+
 A hero randomizer for [Deadlock](https://store.steampowered.com/app/1422450/Deadlock/).
 Pulls the live hero roster from the community data feeds and draws you a hero —
 or a whole six-stack.
@@ -46,6 +48,13 @@ native TypeScript stripping — no test runner. It needs Node 23.6 or newer.
 CI runs the deterministic checks and a production build on every pull request, and
 the live-feed checks nightly — the roster APIs are community-run, so that
 scheduled run is an early warning that one has changed shape or moved.
+
+## Deploying
+
+Every push to `master` rebuilds and publishes to GitHub Pages
+(`.github/workflows/pages.yml`). There is no server: the app is static files that
+talk to the roster APIs from the browser. To enable it on a fork, set
+**Settings → Pages → Source** to **GitHub Actions**.
 
 ## Contributing
 
