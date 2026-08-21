@@ -19,8 +19,14 @@ the migration was done as groundwork for an online-lobby mode.
 npm install
 npm run dev        # http://localhost:5173
 npm run build      # typecheck + production bundle into dist/
-npm run preview    # serve the built bundle
+npm run preview    # serve the built bundle at the origin root
+npm run preview:subpath   # …and at the /deadlock-draft-oracle/ path Pages uses
 ```
+
+Needs Node 23.6+ (CI pins 24, and `.nvmrc` names it). `npm test` goes through
+`scripts/test.mjs`, which adds `--experimental-strip-types` on Node 22.6–23.5 and
+otherwise says what to install — the raw failure is an `ERR_UNKNOWN_FILE_EXTENSION`
+that mentions no version at all.
 
 ## File map
 
@@ -32,7 +38,8 @@ npm run preview    # serve the built bundle
 | `src/components/` | Presentation only. Every component is an `observer`. |
 | `src/styles.css` | **Plain global stylesheet, not CSS Modules.** See below. |
 | `public/` | Favicon, touch icon and the `og.png` share card. Copied into `dist/` verbatim. |
-| `scripts/verify.mjs` | `npm test` — see *Verifying a change*. |
+| `scripts/test.mjs` | `npm test` entry point; picks the Node flags, then runs the harness. |
+| `scripts/verify.mjs` | The checks themselves — see *Verifying a change*. |
 
 ## The five rules
 
@@ -145,6 +152,11 @@ best-effort: if it fails you lose a filter and a colour, never the roster.
   rewrites index.html and imported assets but never a runtime attribute. Neither
   `npm run dev` nor `npm run preview` reproduces it — both serve from the origin
   root — so `npm test` asserts no component builds one.
+  `npm run preview:subpath` mounts the build where Pages does and is the way to
+  check anything base-related by hand, but it does not reproduce *this* bug
+  either: `vite preview` redirects the origin root back to the app (302) where
+  Pages returns 404, so a root-relative link looks like it works. The static
+  check is what actually guards it.
 - **The stage owns the app's draw announcement.** The `<h1>` is keyed on the draw,
   so it is replaced rather than updated and no assistive tech reads it. One
   `role="status"` node in `HeroStage` says what was drawn, and it includes the
@@ -181,8 +193,9 @@ npm run typecheck     # tsc --noEmit, strict
 ```
 
 `scripts/verify.mjs` imports `src/**` directly and runs under plain `node` via
-native TypeScript stripping — no test runner, no build. That requires **Node 23.6+**
-(CI pins 24). It is why `src/lib` imports use explicit `.ts` extensions: Node's ESM
+native TypeScript stripping — no test runner, no build. That requires **Node 23.6+**,
+or 22.6+ with `--experimental-strip-types`, which `scripts/test.mjs` supplies for
+you (CI pins 24). It is why `src/lib` imports use explicit `.ts` extensions: Node's ESM
 resolver requires them.
 
 CI (`.github/workflows/ci.yml`) splits deliberately:

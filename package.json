@@ -4,17 +4,25 @@
   "private": true,
   "type": "module",
   "description": "Hero randomizer for Deadlock — solo picks or a full squad of six, from the live community roster feeds.",
-  "keywords": ["deadlock", "randomizer", "hero-picker"],
+  "keywords": [
+    "deadlock",
+    "randomizer",
+    "hero-picker"
+  ],
   "homepage": "https://sergeydus.github.io/deadlock-draft-oracle/",
   "license": "MIT",
+  "engines": {
+    "node": ">=23.6"
+  },
   "scripts": {
     "dev": "vite",
     "start": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --port 5173",
-    "test": "node scripts/verify.mjs",
-    "test:offline": "node scripts/verify.mjs --offline",
-    "typecheck": "tsc --noEmit"
+    "test": "node scripts/test.mjs",
+    "test:offline": "node scripts/test.mjs --offline",
+    "typecheck": "tsc --noEmit",
+    "preview:subpath": "vite preview --base /deadlock-draft-oracle/ --port 5174"
   },
   "dependencies": {
     "mobx": "^6.13.0",
