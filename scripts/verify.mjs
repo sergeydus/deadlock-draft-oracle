@@ -19,7 +19,7 @@ import { aliasesFrom, normalise, unwrap } from '../src/lib/feed.ts';
 import { drawFrom, drawSquad, mulberry32 } from '../src/lib/random.ts';
 import { eligibleHeroes, hasRoleData, poolFor } from '../src/lib/pool.ts';
 import { mergeInto, parseRoster } from '../src/lib/roster.ts';
-import { isHeroRecord } from '../src/lib/storage.ts';
+import { isHeroRecord, isRecentPick, loadState } from '../src/lib/storage.ts';
 import { clearHash, isOwnHash, parseSquadHash, squadToHash, writeHash } from '../src/lib/share.ts';
 import { cssUrl } from '../src/lib/css.ts';
 // The store is not pure: it reads localStorage and writes the URL. These shims
@@ -336,6 +336,71 @@ const shrunk = new OracleStore();
 await shrunk.load();
 check('an exclusion for a hero the roster dropped is pruned', !shrunk.excluded.has('seven'), [...shrunk.excluded].join(','));
 check('exclusions the roster still has are kept', shrunk.excluded.has('bebop'));
+
+/* ── Recents persistence ──
+   Recents used to be stored as whole Hero records — measured at 3.5KB for five
+   typical heroes, 7.8KB for five with long lore, against ~160B as id+name. The
+   size was the smaller problem: isHeroRecord rejects a record missing any
+   field, so every field added to Hero silently wiped the saved list. Only the
+   id and the name are ever read, so only those are kept. */
+section('recents persistence');
+
+check('isRecentPick accepts the small shape', isRecentPick({ id: 'haze', name: 'Haze' }));
+// A list written by any older version passes unchanged, so the migration needs
+// no version flag — it just reads fewer fields than it used to.
+check('isRecentPick accepts a legacy full Hero record', isRecentPick(hero({ id: 'haze', name: 'Haze' })));
+check('isRecentPick still rejects junk',
+  [null, undefined, 42, 'x', [], {}, { id: 'a' }, { name: 'b' }, { id: '', name: 'b' }, { id: 'a', name: '  ' }]
+    .every((value) => !isRecentPick(value)));
+
+resetBrowser();
+// Exactly what the old schema wrote.
+storage.set('draftOracle_v1', JSON.stringify({
+  recent: [hero({ id: 'haze', name: 'Haze' }), hero({ id: 'lash', name: 'Lash' })],
+  pickCount: 2,
+}));
+const migrated = loadState();
+check('a legacy recents list still loads', migrated.recent.length === 2, JSON.stringify(migrated.recent));
+check('and is narrowed on the way in',
+  migrated.recent.every((pick) => Object.keys(pick).sort().join(',') === 'id,name'),
+  JSON.stringify(migrated.recent));
+check('the names survive the narrowing', migrated.recent.map((pick) => pick.name).join(',') === 'Haze,Lash');
+
+// Round-trip through a real store.
+resetBrowser();
+stubFetch(feed);
+const remembering = new OracleStore();
+await remembering.load();
+remembering.roll();
+const written = JSON.parse(storage.get('draftOracle_v1')).recent;
+check('a draw persists recents in the small shape',
+  written.length > 0 && written.every((pick) => Object.keys(pick).sort().join(',') === 'id,name'),
+  JSON.stringify(written));
+check('recents still keep the last draws out of the pool',
+  remembering.eligible.every((member) => !remembering.recent.some((pick) => pick.id === member.id)),
+  `recent=${remembering.recent.map((pick) => pick.id).join(',')}`);
+
+// The behaviour the small shape had to preserve: with no roster and no cache,
+// the recent chips still have something to render. Storing bare ids would have
+// left them blank in exactly the state where the app can show nothing else.
+const remembered = remembering.recent.map((pick) => pick.name);
+resetBrowser({ keepStorage: true });
+storage.delete('draftOracle_v1_roster');
+stubFetch('fail');
+const strandedStore = await quietly(async () => {
+  const store = new OracleStore();
+  await store.load();
+  return store;
+});
+check('with no roster at all the app is offline', strandedStore.mode === 'offline' && strandedStore.heroes.length === 0);
+check('and the recent chips still have names to show',
+  strandedStore.recent.length > 0 && strandedStore.recent.every((pick) => pick.name.length > 0),
+  strandedStore.recent.map((pick) => pick.name).join(', '));
+check('the same names as before the roster went away',
+  strandedStore.recent.map((pick) => pick.name).join(',') === remembered.join(','),
+  `${strandedStore.recent.map((pick) => pick.name).join(',')} vs ${remembered.join(',')}`);
+
+restoreFetch();
 
 /* ── A received link stays received ──
    The marker means "this tab produced the draw this hash describes", not "the

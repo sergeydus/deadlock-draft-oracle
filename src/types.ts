@@ -22,6 +22,18 @@ export interface Hero {
   aliases: string;
 }
 
+/**
+ * A hero in the recents list.
+ *
+ * Only the id (to keep it out of the next draw) and the name (to label the
+ * chip) are ever used, so only those are persisted. Storing whole `Hero`
+ * records meant every field added to `Hero` invalidated the saved list.
+ */
+export interface RecentPick {
+  id: string;
+  name: string;
+}
+
 export interface Source {
   url: string;
   name: string;

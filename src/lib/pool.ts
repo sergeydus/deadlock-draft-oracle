@@ -4,7 +4,8 @@ import type { Hero } from '../types.ts';
 export interface PoolCriteria {
   heroes: readonly Hero[];
   excluded: ReadonlySet<string>;
-  recent: readonly Hero[];
+  /** Only ids are read; a full Hero or a RecentPick both satisfy this. */
+  recent: readonly { id: string }[];
   complexity: ReadonlySet<number>;
   roles: ReadonlySet<string>;
   avoidRecent: boolean;
@@ -20,7 +21,7 @@ export function hasRoleData(heroes: readonly Hero[]): boolean {
 
 export function eligibleHeroes(criteria: PoolCriteria): Hero[] {
   const { heroes, excluded, recent, complexity, roles, avoidRecent, releasedOnly, ignoreRecent = false } = criteria;
-  const avoid = !ignoreRecent && avoidRecent ? new Set(recent.map((hero) => hero.id)) : new Set<string>();
+  const avoid = !ignoreRecent && avoidRecent ? new Set(recent.map((pick) => pick.id)) : new Set<string>();
   // A saved role filter outlives the data it depends on: roles only arrive from
   // the enrichment pass, so if that fails (offline, or the other feed is down)
   // no hero has one. Applying the filter then empties the pool — and the role

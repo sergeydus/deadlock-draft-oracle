@@ -5,7 +5,7 @@ import { eligibleHeroes, hasRoleData, poolFor, type PoolCriteria } from '../lib/
 import { fetchEnrichment, fetchRoster, mergeInto } from '../lib/roster.ts';
 import { clearHash, copyToClipboard, isOwnHash, readSharedDraw, writeHash } from '../lib/share.ts';
 import { loadCachedRoster, loadState, saveCachedRoster, saveState } from '../lib/storage.ts';
-import type { Hero, StatusKind } from '../types.ts';
+import type { Hero, RecentPick, StatusKind } from '../types.ts';
 
 /** What the stage should be showing. */
 export type StageMode = 'loading' | 'draw' | 'empty' | 'offline';
@@ -32,7 +32,8 @@ export class OracleStore {
   /** Empty means "every role", not "none". */
   roles = new Set<string>();
   excluded = new Set<string>();
-  recent: Hero[] = [];
+  /** Just id and name — see RecentPick. */
+  recent: RecentPick[] = [];
   /** heroId -> times drawn, lifetime. */
   tally: Record<string, number> = {};
   /** Lifetime draws, including every member of a squad draw. */
@@ -282,7 +283,7 @@ export class OracleStore {
     // Restored ids may name heroes the roster no longer has.
     const byId = this.byId;
     this.excluded = new Set([...this.excluded].filter((id) => byId.has(id)));
-    this.recent = this.recent.map((hero) => byId.get(hero.id)).filter((hero): hero is Hero => hero !== undefined).slice(0, RECENT_LIMIT);
+    this.recent = this.recent.filter((pick) => byId.has(pick.id)).slice(0, RECENT_LIMIT);
     this.squad = this.squad.map((hero) => byId.get(hero.id)).filter((hero): hero is Hero => hero !== undefined);
 
     // A shared link wins over a fresh roll so the recipient sees the sender's draw.
@@ -312,7 +313,8 @@ export class OracleStore {
     for (const hero of heroes) this.tally[hero.id] = (this.tally[hero.id] || 0) + 1;
     this.pickCount += heroes.length;
     const drawn = new Set(heroes.map((hero) => hero.id));
-    this.recent = [...heroes, ...this.recent.filter((hero) => !drawn.has(hero.id))].slice(0, RECENT_LIMIT);
+    const picks = heroes.map(({ id, name }) => ({ id, name }));
+    this.recent = [...picks, ...this.recent.filter((pick) => !drawn.has(pick.id))].slice(0, RECENT_LIMIT);
   }
 
   /** @param record false for draws restored from a share link. */

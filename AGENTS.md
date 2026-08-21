@@ -100,6 +100,7 @@ best-effort: if it fails you lose a filter and a colour, never the roster.
 |---|---|
 | New filter on the draw pool | `PoolCriteria` + `eligibleHeroes()` in `lib/pool.ts`, a field and getter on the store, a control in `SettingsPanel` |
 | New persisted setting | `PersistedState` in `lib/storage.ts` → `restore()`/`persist()` on the store |
+| Something new in recents | `RecentPick` in `types.ts` — keep it to what the chip renders |
 | New feed source | Append to `SOURCES`; verify `normalise()` handles its field names |
 | Use another feed field | `Hero` → `normalise()` → `isHeroRecord()` → `MERGEABLE_FIELDS` |
 | Change the stage | `components/HeroStage.tsx` only |
@@ -180,6 +181,7 @@ best-effort: if it fails you lose a filter and a colour, never the roster.
   asserts they still match `package.json` and that `og.png` is really the
   1200x630 the tags claim. Everything else — including the two icon `<link>`s —
   stays relative.
+- **Recents persist as `{id, name}`, not whole heroes.** Only those two fields are ever read — the id keeps a hero out of the next draw, the name labels the chip — and storing full records meant every field added to `Hero` made `isHeroRecord` reject the saved list. The name is kept rather than resolved from the roster on purpose: with no roster and no cache, it is the only thing the chips have left to show. A list written by the old schema still loads, since a full `Hero` satisfies `isRecentPick`.
 - **Two `localStorage` keys**: `draftOracle_v1` (settings/history) and
   `draftOracle_v1_roster` (the offline roster cache). Reading either can throw in
   private mode — every access is already wrapped.
