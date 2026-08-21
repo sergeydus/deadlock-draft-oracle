@@ -3,7 +3,7 @@ import { COMPLEXITY_LEVELS, RECENT_LIMIT, ROLE_ORDER, SOURCES, TALLY_ROWS } from
 import { drawFrom, drawSquad, mulberry32, randomSeed, type Rng } from '../lib/random.ts';
 import { eligibleHeroes, hasRoleData, poolFor, type PoolCriteria } from '../lib/pool.ts';
 import { fetchEnrichment, fetchRoster, mergeInto } from '../lib/roster.ts';
-import { copyToClipboard, readSharedDraw, writeHash } from '../lib/share.ts';
+import { clearHash, copyToClipboard, isOwnHash, readSharedDraw, writeHash } from '../lib/share.ts';
 import { loadCachedRoster, loadState, saveCachedRoster, saveState } from '../lib/storage.ts';
 import type { Hero, StatusKind } from '../types.ts';
 
@@ -127,6 +127,41 @@ export class OracleStore {
     return `${label}  ·  ${this.source.toUpperCase()}`;
   }
 
+  /**
+   * One short sentence for assistive tech.
+   *
+   * The stage announces nothing on its own: the <h1> is not a live region, and
+   * the roster grid used to be one, so a draw either went unannounced or was
+   * buried under thirty re-rendered cards. This is the single thing worth
+   * saying, said once.
+   *
+   * The pick number is included so that drawing the same hero twice still
+   * changes the text — a live region that repeats itself announces nothing.
+   */
+  get announcement(): string {
+    switch (this.mode) {
+      case 'loading': return '';
+      case 'offline': return 'Live roster unavailable. Check your connection, then refresh the roster.';
+      case 'empty': return 'No hero is eligible. Re-enable a hero or clear your exclusions.';
+      default: {
+        if (!this.squad.length) return '';
+        const names = this.squad.map((hero) => hero.name).join(', ');
+        if (this.shared) return `Shared draw: ${names}.`;
+        return this.squad.length > 1
+          ? `Draw ${this.pickCount}: ${names}.`
+          : `Pick ${this.pickCount}: ${names}.`;
+      }
+    }
+  }
+
+  /** How many heroes the search box is currently showing, for the same purpose. */
+  get rosterAnnouncement(): string {
+    if (!this.heroes.length) return '';
+    if (!this.search.trim()) return `${this.heroes.length} heroes.`;
+    const matches = this.visibleRoster.length;
+    return matches === 1 ? '1 hero matches.' : `${matches} heroes match.`;
+  }
+
   get rollLabel(): string {
     return this.squadSize > 1 ? `DRAW SQUAD OF ${this.squadSize}` : 'PICK MY HERO';
   }
@@ -228,9 +263,14 @@ export class OracleStore {
     this.squad = this.squad.map((hero) => byId.get(hero.id)).filter((hero): hero is Hero => hero !== undefined);
 
     // A shared link wins over a fresh roll so the recipient sees the sender's draw.
+    // Every roll writes the hash as well, so the marker is what separates a link
+    // somebody sent from the one this tab left in its own address bar; without
+    // that test a reload relabels your own pick as SHARED DRAW, suppresses the
+    // opening draw, and can resurrect a hero you have since excluded.
     const shared = readSharedDraw(byId);
-    if (shared.length) this.commitDraw(shared, false);
-    else this.roll();
+    if (shared.length && !isOwnHash()) this.commitDraw(shared, false);
+    // A manual refresh keeps the pick already on screen; only a cold start rolls.
+    else if (!this.squad.length) this.roll();
   }
 
   private setStatus(message: string, kind: StatusKind = ''): void {
@@ -275,6 +315,9 @@ export class OracleStore {
       this.squad = [];
       this.featured = 0;
       this.mode = 'empty';
+      // Otherwise the URL still names the old draw, and reloading restores it —
+      // excluded heroes included.
+      clearHash();
       return;
     }
     this.commitDraw(drawSquad(pool, this.squadSize, { coverRoles: this.coverRoles, rng: this.rng }));
@@ -300,6 +343,7 @@ export class OracleStore {
   }
 
   applySharedFromHash(): void {
+    if (isOwnHash()) return;
     const shared = readSharedDraw(this.byId);
     if (shared.length) this.commitDraw(shared, false);
   }

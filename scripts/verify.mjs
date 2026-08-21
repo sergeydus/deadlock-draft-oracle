@@ -20,8 +20,13 @@ import { drawFrom, drawSquad, mulberry32 } from '../src/lib/random.ts';
 import { eligibleHeroes, hasRoleData, poolFor } from '../src/lib/pool.ts';
 import { mergeInto, parseRoster } from '../src/lib/roster.ts';
 import { isHeroRecord } from '../src/lib/storage.ts';
-import { parseSquadHash, squadToHash } from '../src/lib/share.ts';
+import { clearHash, isOwnHash, parseSquadHash, squadToHash, writeHash } from '../src/lib/share.ts';
 import { cssUrl } from '../src/lib/css.ts';
+// The store is not pure: it reads localStorage and writes the URL. These shims
+// stand in for the browser so it can be exercised here. The import has to come
+// before the store's, which constructs a singleton as it is evaluated.
+import { resetBrowser, restoreFetch, stubFetch } from './browser-shims.mjs';
+import { OracleStore } from '../src/store/OracleStore.ts';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const css = readFileSync(join(root, 'src/styles.css'), 'utf8');
@@ -191,6 +196,197 @@ check('a squad round-trips through the hash',
 check('a hash without a squad yields nothing', parseSquadHash('#seed=4').length === 0);
 check('the hash is capped at a full squad', parseSquadHash(`#squad=${'a,b,c,d,e,f,g,h'}`).length === 6);
 
+/* ── Telling your own hash from somebody else's ──
+   Every roll writes the hash, so it doubles as a permalink for the current tab
+   and the hash alone can no longer say who wrote it. A marker in history.state
+   settles it: restored on reload, absent on a fresh navigation. It has to name
+   the hash it was written for — binding it to `location.hash` reads the
+   *previous* value, and a marker that never matches turns every draw back into
+   a "shared" one with nothing to notice. */
+section('share-link identity');
+
+resetBrowser();
+const rolled = [hero({ id: 'abrams' }), hero({ id: 'bebop' })];
+history.replaceState({ router: 'state another library owns' }, '', '/deadlock-draft-oracle/#squad=previous');
+writeHash(rolled);
+
+check('writeHash puts the squad in the address bar', location.hash === '#squad=abrams,bebop', location.hash);
+check('writeHash marks the hash it wrote, not the one it replaced', isOwnHash(),
+  `marker=${JSON.stringify(history.state?.draftOracle)} hash=${location.hash}`);
+check('writeHash leaves state it does not own alone', history.state.router === 'state another library owns');
+
+location.hash = '#squad=someone,else';
+check('a hash changed underneath the marker is not ours', !isOwnHash(), location.hash);
+
+resetBrowser({ hash: '#squad=abrams,bebop', state: null });
+check('a pasted link carries no marker, so it is not ours', !isOwnHash());
+
+writeHash(rolled);
+clearHash();
+check('clearHash empties the address bar', location.hash === '');
+check('clearHash drops the marker with it', !isOwnHash() && history.state?.draftOracle === undefined);
+
+/* ── Store behaviour ──
+   Every piece the store is built from was covered while the way it wires them
+   together was not, which is how a reload came to relabel your own pick as a
+   shared draw and hand back heroes you had already excluded. These are the
+   seams between those pieces. */
+section('store behaviour');
+
+const rosterIds = ['abrams', 'bebop', 'dynamo', 'haze', 'infernus', 'lash', 'mcginnis', 'seven'];
+const feed = rosterIds.map((id, index) => ({
+  name: id,
+  class_name: `hero_${id}`,
+  complexity: (index % COMPLEXITY_LEVELS.length) + 1,
+  hero_type: ROLE_ORDER[index % ROLE_ORDER.length],
+  images: { icon_hero_card: `https://assets.test/${id}.png` },
+  description: 'a blurb',
+}));
+const squadIds = (store) => store.squad.map((member) => member.id).join(',');
+
+// A cold start: nothing in the address bar, nothing in storage.
+resetBrowser();
+stubFetch(feed);
+const cold = new OracleStore();
+await cold.load();
+check('a cold start draws a hero by itself', cold.mode === 'draw' && cold.squad.length === 1, squadIds(cold));
+check('the opening draw is not labelled shared', cold.shared === false, cold.stageLabel);
+check('the opening draw is recorded', cold.pickCount === 1 && cold.recent.length === 1);
+check('rolling leaves a shareable hash behind', location.hash.startsWith('#squad='), location.hash);
+
+// Reloading that same tab: the hash is still there, and so is its marker.
+resetBrowser({ hash: location.hash, state: history.state, keepStorage: true });
+stubFetch(feed);
+const reloaded = new OracleStore();
+await reloaded.load();
+check('reloading your own tab is never a SHARED DRAW', reloaded.shared === false, reloaded.stageLabel);
+check('reloading still draws a hero automatically', reloaded.mode === 'draw' && reloaded.squad.length === 1, squadIds(reloaded));
+// Deliberate, and the direct consequence of restoring the opening roll: a
+// reload is a new draw and is tallied like one. Pinned here because it is the
+// kind of thing a later change would "fix" without realising it is the point.
+check('a reload counts as a new draw, because it is one',
+  reloaded.pickCount === cold.pickCount + 1, `${cold.pickCount} -> ${reloaded.pickCount}`);
+
+// Somebody else's link: the same shape of hash, with no marker behind it.
+resetBrowser({ hash: '#squad=haze,lash', state: null });
+stubFetch(feed);
+const recipient = new OracleStore();
+await recipient.load();
+check("a pasted link restores the sender's draw", squadIds(recipient) === 'haze,lash', squadIds(recipient));
+check('a pasted link IS labelled SHARED DRAW', recipient.shared && recipient.stageLabel.includes('SHARED DRAW'),
+  recipient.stageLabel);
+check('a shared draw is kept out of the tally', Object.keys(recipient.tally).length === 0);
+check('a shared draw is kept out of recents', recipient.recent.length === 0);
+
+// The refresh button re-runs load() against a roster that is already on screen.
+resetBrowser();
+stubFetch(feed);
+const refreshed = new OracleStore();
+await refreshed.load();
+const heldPick = squadIds(refreshed);
+const heldCount = refreshed.pickCount;
+await refreshed.load();
+check('a manual refresh keeps the pick on screen', squadIds(refreshed) === heldPick, `${heldPick} -> ${squadIds(refreshed)}`);
+check('a manual refresh does not relabel it shared', refreshed.shared === false, refreshed.stageLabel);
+check('a manual refresh does not inflate the draw count', refreshed.pickCount === heldCount);
+
+// Excluding the whole roster empties the pool; the URL must not still name a draw.
+resetBrowser();
+stubFetch(feed);
+const emptied = new OracleStore();
+await emptied.load();
+const banished = emptied.squad[0].id;
+for (const id of rosterIds) emptied.toggleExcluded(id);
+emptied.roll();
+check('excluding every hero empties the stage', emptied.mode === 'empty' && emptied.squad.length === 0, emptied.mode);
+check('an empty pool clears the stale hash', location.hash === '', location.hash);
+
+resetBrowser({ hash: location.hash, state: history.state, keepStorage: true });
+stubFetch(feed);
+const afterEmpty = new OracleStore();
+await afterEmpty.load();
+check('reloading does not resurrect an excluded hero', !afterEmpty.squad.some((member) => member.id === banished), squadIds(afterEmpty));
+check('reloading an emptied pool stays empty', afterEmpty.mode === 'empty', afterEmpty.mode);
+
+// Settings round-trip, and ids the roster no longer has are pruned.
+resetBrowser();
+stubFetch(feed);
+const before = new OracleStore();
+await before.load();
+before.toggleExcluded('bebop');
+before.toggleExcluded('seven');
+before.setSquadSize(3);
+
+resetBrowser({ keepStorage: true });
+stubFetch(feed);
+const after = new OracleStore();
+await after.load();
+check('exclusions survive a reload', after.excluded.has('bebop'), [...after.excluded].join(','));
+check('squad size survives a reload', after.squadSize === 3, String(after.squadSize));
+
+resetBrowser({ keepStorage: true });
+stubFetch(feed.filter((entry) => entry.name !== 'seven'));
+const shrunk = new OracleStore();
+await shrunk.load();
+check('an exclusion for a hero the roster dropped is pruned', !shrunk.excluded.has('seven'), [...shrunk.excluded].join(','));
+check('exclusions the roster still has are kept', shrunk.excluded.has('bebop'));
+
+/* ── What the screen reader is told ──
+   The stage heading is keyed on the draw, so it is replaced rather than
+   updated and announces nothing; the roster grid was the only live region and
+   it spoke for thirty cards at once. One sentence, in one place, is the fix —
+   and it has to differ between consecutive draws or a live region stays
+   silent. */
+section('draw announcements');
+
+resetBrowser();
+stubFetch(feed);
+const spoken = new OracleStore();
+await spoken.load();
+const firstSaid = spoken.announcement;
+check('a solo draw is announced by name', firstSaid.includes(spoken.squad[0].name), firstSaid);
+check('the announcement carries the pick number', /^Pick \d+:/.test(firstSaid), firstSaid);
+
+// Force the same hero twice: the text must still change, or nothing is read out.
+const only = spoken.squad[0];
+for (const member of rosterIds.filter((id) => id !== only.id)) spoken.toggleExcluded(member);
+spoken.roll();
+const repeatOne = spoken.announcement;
+spoken.roll();
+const repeatTwo = spoken.announcement;
+check('drawing the same hero twice still changes the announcement',
+  repeatOne !== repeatTwo && repeatOne.includes(only.name) && repeatTwo.includes(only.name),
+  `${repeatOne} -> ${repeatTwo}`);
+
+resetBrowser({ hash: '#squad=haze,lash', state: null });
+stubFetch(feed);
+const spokenShare = new OracleStore();
+await spokenShare.load();
+check('a shared draw says so', spokenShare.announcement.startsWith('Shared draw:'), spokenShare.announcement);
+check('a squad announcement names every member',
+  spokenShare.squad.every((member) => spokenShare.announcement.includes(member.name)),
+  spokenShare.announcement);
+
+resetBrowser();
+stubFetch(feed);
+const spokenEmpty = new OracleStore();
+await spokenEmpty.load();
+for (const id of rosterIds) spokenEmpty.toggleExcluded(id);
+spokenEmpty.roll();
+check('an empty pool explains itself', spokenEmpty.announcement.includes('No hero is eligible'), spokenEmpty.announcement);
+
+resetBrowser();
+stubFetch(feed);
+const searched = new OracleStore();
+await searched.load();
+check('the roster announces its size', searched.rosterAnnouncement === `${rosterIds.length} heroes.`, searched.rosterAnnouncement);
+searched.setSearch('haze');
+check('searching announces the match count', searched.rosterAnnouncement === '1 hero matches.', searched.rosterAnnouncement);
+searched.setSearch('zzzz');
+check('a search with no matches says zero', searched.rosterAnnouncement === '0 heroes match.', searched.rosterAnnouncement);
+
+restoreFetch();
+
 /* ── Cache and parsing guards ── */
 section('cache and parsing guards');
 
@@ -315,6 +511,22 @@ const renderedTokens = new Set(
 const unstyled = [...styledClasses].filter((name) => !renderedTokens.has(name)).sort();
 check('every class styles.css targets is still rendered', unstyled.length === 0,
   unstyled.length ? `no component produces: ${unstyled.map((n) => `.${n}`).join(', ')}` : `all ${styledClasses.size} classes`);
+
+/* ── Subpath safety ──
+   Production is served from a repo subpath, so a root-relative URL in a
+   component leaves the site entirely — an `href="/"` in the header shipped a
+   link to a 404. `base: './'` cannot catch it: Vite rewrites index.html and
+   imported assets, never a runtime attribute. Neither `npm run dev` nor
+   `npm run preview` reproduces it either, since both serve from the origin
+   root — so this check is the only thing between that bug and production. */
+section('subpath safety');
+
+const rootRelative = walk(join(root, 'src'))
+  .filter((file) => /\.tsx?$/.test(file))
+  .flatMap((file) => [...readFileSync(file, 'utf8').matchAll(/(?:href|src|action)=["']\/(?!\/)[^"']*["']/g)]
+    .map((match) => `${file.slice(root.length + 1)} ${match[0]}`));
+check('no component builds a root-relative URL', rootRelative.length === 0,
+  rootRelative.length ? rootRelative.join('; ') : 'every link is relative to the deployed base');
 
 /* ── Live feeds through the shipped parser ── */
 

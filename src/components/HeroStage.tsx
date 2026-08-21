@@ -119,6 +119,10 @@ export const HeroStage = observer(function HeroStage() {
         </button>
       </div>
       <p className="shortcut">Press <kbd>Space</kbd> to reroll</p>
+      {/* The one live region in the app. The heading cannot be it: it is keyed
+          on the draw, so it is replaced rather than updated, and a screen
+          reader is told nothing. */}
+      <p className="visually-hidden" role="status" aria-live="polite">{store.announcement}</p>
     </section>
   );
 });

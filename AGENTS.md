@@ -82,7 +82,7 @@ derived invalidates every saved `localStorage` and every share link in the wild.
 
 **Neither feed carries every field.** `deadlock-api` has `role` and `accent`;
 `deadlock.io` has the 17-language names and search aliases. So the store loads a
-base roster from the first source that answers, then `enrichRoster()` fetches the
+base roster from the first source that answers, then `OracleStore.enrich()` fetches the
 *other* source in the background and fills in the blanks, merged by `id`. It is
 best-effort: if it fails you lose a filter and a colour, never the roster.
 
@@ -95,6 +95,7 @@ best-effort: if it fails you lose a filter and a colour, never the roster.
 | New feed source | Append to `SOURCES`; verify `normalise()` handles its field names |
 | Use another feed field | `Hero` → `normalise()` → `isHeroRecord()` → `MERGEABLE_FIELDS` |
 | Change the stage | `components/HeroStage.tsx` only |
+| Change what a draw announces | `announcement` getter on the store |
 
 ## Gotchas
 
@@ -122,6 +123,27 @@ best-effort: if it fails you lose a filter and a colour, never the roster.
 - **Share links carry hero ids, not the seed** (`#squad=id1,id2,…`). A seed only
   reproduces a draw against an identical pool; ids are exact for every recipient. A
   draw restored from a link is *not* recorded in recents or the tally.
+- **Every roll writes the hash too, so the hash alone cannot say who wrote it.**
+  `writeHash()` therefore stamps `history.state` with a marker naming the exact
+  hash it wrote, and `isOwnHash()` compares the two; only a hash without a
+  matching marker is treated as somebody else's draw. The marker survives a
+  reload and is absent on a fresh navigation, which is the whole trick. Without
+  it a reload relabelled your own pick `SHARED DRAW`, suppressed the opening
+  draw, and could hand back a hero you had excluded. **Bind the marker to the
+  hash being written, never to `location.hash`** — that is still the previous
+  value while `replaceState` runs, and a marker that never matches restores the
+  bug silently.
+- **A root-relative URL breaks in production only.** The app is served from a repo
+  subpath, so `href="/"` leaves the site; `base: './'` cannot help, because Vite
+  rewrites index.html and imported assets but never a runtime attribute. Neither
+  `npm run dev` nor `npm run preview` reproduces it — both serve from the origin
+  root — so `npm test` asserts no component builds one.
+- **The stage owns the app's draw announcement.** The `<h1>` is keyed on the draw,
+  so it is replaced rather than updated and no assistive tech reads it. One
+  `role="status"` node in `HeroStage` says what was drawn, and it includes the
+  pick number so that two identical draws in a row still change the text. Do not
+  put `aria-live` back on `.roster-grid`: it holds every card, and a keystroke in
+  the search box then announces batches of them.
 - **The `Space` shortcut deliberately skips** when a button, link or input has
   focus, so it does not shadow that control's own activation.
 - **Two `localStorage` keys**: `draftOracle_v1` (settings/history) and
@@ -149,8 +171,12 @@ CI (`.github/workflows/ci.yml`) splits deliberately:
   it retries once and then opens or comments on a `feed-canary` issue. That nightly
   run is the point: it is how you learn a roster API moved before your users do.
 
+`scripts/browser-shims.mjs` supplies the browser globals the store needs — it is
+not pure, and leaving it untested is how the share-hash bug survived a suite that
+covered every piece it is built from. Import those shims *before* the store.
+
 None of that renders a page, so this manual list still matters (console must stay
-clean):
+clean) — though steps 1, 7 and 8 now have automated cover:
 
 1. Roster loads, status pill goes green, a hero is drawn automatically.
 2. `Space` and **PICK MY HERO** both draw; the art crossfades with no empty flash
