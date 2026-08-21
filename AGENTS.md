@@ -31,6 +31,7 @@ npm run preview    # serve the built bundle
 | `src/lib/` | Pure logic, no DOM and no store: `feed` (parsing), `random` (seeded draws), `pool` (filters), `roster` (fetch + merge), `storage`, `share`, `css`. |
 | `src/components/` | Presentation only. Every component is an `observer`. |
 | `src/styles.css` | **Plain global stylesheet, not CSS Modules.** See below. |
+| `public/` | Favicon, touch icon and the `og.png` share card. Copied into `dist/` verbatim. |
 | `scripts/verify.mjs` | `npm test` — see *Verifying a change*. |
 
 ## The five rules
@@ -161,6 +162,12 @@ best-effort: if it fails you lose a filter and a colour, never the roster.
   time, which is safe only because it keeps the pick already on screen; and
   priming is skipped when a roster is already displayed, so a manual refresh
   never replaces live data with an older copy of itself.
+- **The social-card URLs are the one exception to the relative-URL rule.** A
+  crawler reading `og:image` has no document to resolve it against, so that tag
+  and `og:url` are absolute and hardcoded to the deployed `homepage`. `npm test`
+  asserts they still match `package.json` and that `og.png` is really the
+  1200x630 the tags claim. Everything else — including the two icon `<link>`s —
+  stays relative.
 - **Two `localStorage` keys**: `draftOracle_v1` (settings/history) and
   `draftOracle_v1_roster` (the offline roster cache). Reading either can throw in
   private mode — every access is already wrapped.

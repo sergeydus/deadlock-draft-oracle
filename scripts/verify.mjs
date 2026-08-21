@@ -669,6 +669,41 @@ const unstyled = [...styledClasses].filter((name) => !renderedTokens.has(name)).
 check('every class styles.css targets is still rendered', unstyled.length === 0,
   unstyled.length ? `no component produces: ${unstyled.map((n) => `.${n}`).join(', ')}` : `all ${styledClasses.size} classes`);
 
+/* ── Social metadata ──
+   Every share link used to unfurl as a bare URL. The card assets live in
+   public/ and are copied verbatim, so nothing else validates them: this checks
+   the tags exist, that the two URLs a crawler cannot resolve for itself are
+   absolute and agree with package.json, and that og.png is still the size the
+   tags claim. */
+section('social metadata');
+
+const html = readFileSync(join(root, 'index.html'), 'utf8');
+const homepage = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).homepage;
+const meta = (name) => html.match(new RegExp(`(?:property|name)="${name}" content="([^"]*)"`))?.[1] ?? null;
+
+for (const tag of ['og:title', 'og:description', 'og:url', 'og:image', 'twitter:card', 'twitter:image']) {
+  check(`index.html declares ${tag}`, Boolean(meta(tag)), meta(tag) ?? 'missing');
+}
+check('og:url is absolute and matches package.json homepage', meta('og:url') === homepage,
+  `${meta('og:url')} vs ${homepage}`);
+check('og:image is absolute', /^https:\/\//.test(meta('og:image') ?? ''), meta('og:image') ?? 'missing');
+check('og:image sits under the deployed homepage', (meta('og:image') ?? '').startsWith(homepage), meta('og:image') ?? '');
+check('twitter:image matches og:image', meta('twitter:image') === meta('og:image'));
+check('the card is a summary_large_image', meta('twitter:card') === 'summary_large_image', meta('twitter:card') ?? '');
+
+const card = readFileSync(join(root, 'public/og.png'));
+const cardIsPng = card.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+const cardSize = cardIsPng ? { w: card.readUInt32BE(16), h: card.readUInt32BE(20) } : null;
+check('public/og.png is a PNG', cardIsPng);
+// Below 200x200 a crawler drops the card entirely; the declared size has to be
+// the real one or the preview is letterboxed.
+check('og.png is the size the tags declare',
+  cardSize?.w === Number(meta('og:image:width')) && cardSize?.h === Number(meta('og:image:height')),
+  cardSize ? `${cardSize.w}x${cardSize.h}` : 'unreadable');
+check('og.png is within the 5MB most crawlers accept', card.length < 5_000_000, `${(card.length / 1024).toFixed(0)}KB`);
+check('a favicon and a touch icon ship with it',
+  readFileSync(join(root, 'public/favicon.svg')).length > 0 && readFileSync(join(root, 'public/apple-touch-icon.png')).length > 0);
+
 /* ── Subpath safety ──
    Production is served from a repo subpath, so a root-relative URL in a
    component leaves the site entirely — an `href="/"` in the header shipped a
