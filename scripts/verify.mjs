@@ -337,6 +337,71 @@ await shrunk.load();
 check('an exclusion for a hero the roster dropped is pruned', !shrunk.excluded.has('seven'), [...shrunk.excluded].join(','));
 check('exclusions the roster still has are kept', shrunk.excluded.has('bebop'));
 
+/* ── A received link stays received ──
+   The marker means "this tab produced the draw this hash describes", not "the
+   app has seen this hash". Restoring a shared draw therefore leaves the address
+   bar alone: stamping it would make this tab the author, and the recipient
+   would get a fresh roll on reload instead of the draw they were sent — while
+   the link they were given was quietly rewritten out of their address bar. */
+section('a received link stays received');
+
+const SHARED_HASH = '#squad=haze,lash';
+
+// 1. Fresh navigation to a shared link.
+resetBrowser({ hash: SHARED_HASH, state: null });
+stubFetch(feed);
+const guest = new OracleStore();
+await guest.load();
+check('a shared link opens as a shared draw', guest.shared && squadIds(guest) === 'haze,lash', guest.stageLabel);
+check('restoring it leaves the address bar untouched', location.hash === SHARED_HASH, location.hash);
+check('and does not stamp the tab as its author', !isOwnHash(), JSON.stringify(history.state));
+
+// 2. Reloading that page.
+resetBrowser({ hash: location.hash, state: history.state, keepStorage: true });
+stubFetch(feed);
+const guestAgain = new OracleStore();
+await guestAgain.load();
+check('reloading a received link keeps the same heroes', squadIds(guestAgain) === 'haze,lash', squadIds(guestAgain));
+check('reloading a received link is still SHARED DRAW', guestAgain.shared, guestAgain.stageLabel);
+
+// 3. Copying the received link must not claim it either.
+await guestAgain.copyLink();
+check('copying a received link does not claim its hash', !isOwnHash(), JSON.stringify(history.state));
+check('and the hash it copied is the one that arrived', location.hash === SHARED_HASH, location.hash);
+resetBrowser({ hash: location.hash, state: history.state, keepStorage: true });
+stubFetch(feed);
+const guestAfterCopy = new OracleStore();
+await guestAfterCopy.load();
+check('still shared after copying and reloading', guestAfterCopy.shared && squadIds(guestAfterCopy) === 'haze,lash',
+  guestAfterCopy.stageLabel);
+
+// 4. Rolling makes the tab the author again.
+resetBrowser({ hash: SHARED_HASH, state: null });
+stubFetch(feed);
+const guestWhoRolls = new OracleStore();
+await guestWhoRolls.load();
+guestWhoRolls.roll();
+check('rolling after a shared draw drops the shared label', !guestWhoRolls.shared, guestWhoRolls.stageLabel);
+check('rolling writes a hash this tab owns', isOwnHash(), `${location.hash} ${JSON.stringify(history.state)}`);
+
+resetBrowser({ hash: location.hash, state: history.state, keepStorage: true });
+stubFetch(feed);
+const afterRolling = new OracleStore();
+await afterRolling.load();
+check('reloading after that rolls again rather than restoring', !afterRolling.shared && afterRolling.mode === 'draw',
+  afterRolling.stageLabel);
+
+// Rerolling one slot of a received squad is equally an act of authorship.
+resetBrowser({ hash: SHARED_HASH, state: null });
+stubFetch(feed);
+const guestWhoRerolls = new OracleStore();
+await guestWhoRerolls.load();
+guestWhoRerolls.rerollSlot(1);
+check('rerolling a slot of a received squad claims it', !guestWhoRerolls.shared && isOwnHash(),
+  `${guestWhoRerolls.stageLabel} ${location.hash}`);
+
+restoreFetch();
+
 /* ── Cache-first loading ──
    The cached roster used to be the last resort, read only after every source
    had exhausted FETCH_TIMEOUT_MS — a returning visitor waited a measured 16s

@@ -133,6 +133,12 @@ best-effort: if it fails you lose a filter and a colour, never the roster.
   hash being written, never to `location.hash`** — that is still the previous
   value while `replaceState` runs, and a marker that never matches restores the
   bug silently.
+  The marker means exactly *this tab produced the draw this hash describes* —
+  not "the app has seen this hash". So `commitDraw()` writes the hash only when
+  `record` is true, and `copyLink()` only when the draw is not already shared:
+  a received link keeps the sender's hash untouched and still reads as
+  `SHARED DRAW` after a reload. Rolling or rerolling afterwards makes the draw
+  this tab's own, and the next reload opens with a fresh draw as usual.
 - **A root-relative URL breaks in production only.** The app is served from a repo
   subpath, so `href="/"` leaves the site; `base: './'` cannot help, because Vite
   rewrites index.html and imported assets but never a runtime attribute. Neither

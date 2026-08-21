@@ -326,8 +326,12 @@ export class OracleStore {
     if (record) {
       this.recordDraw(heroes);
       this.persist();
+      // Only a draw this tab produced writes the hash. Restoring one leaves the
+      // address bar exactly as it arrived: the hash is already correct, and
+      // stamping the marker on it would make this tab its author, so a reload
+      // would show a fresh roll instead of the draw somebody sent.
+      writeHash(heroes);
     }
-    writeHash(heroes);
   }
 
   roll(): void {
@@ -415,7 +419,9 @@ export class OracleStore {
   clearTally(): void { this.tally = {}; this.pickCount = 0; this.persist(); }
 
   async copyLink(): Promise<void> {
-    writeHash(this.squad);
+    // Same rule: a received draw already carries the sender's hash, and marking
+    // it here would quietly turn a shared link into this tab's own.
+    if (!this.shared) writeHash(this.squad);
     const copied = await copyToClipboard(location.href);
     runInAction(() => {
       this.showToast(copied ? 'Draw link copied to clipboard.' : 'Copy failed — the link is in your address bar.');
