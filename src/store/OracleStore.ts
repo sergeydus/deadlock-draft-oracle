@@ -199,10 +199,32 @@ export class OracleStore {
 
   /* ── Roster loading ── */
 
+  /**
+   * Show the cached roster straight away, before the network is consulted.
+   *
+   * Runs synchronously, ahead of the first await in `load()`, so the app is
+   * usable on the same tick. It used to be the last resort instead: the cache
+   * was only read once every source had exhausted its timeout, which left a
+   * returning visitor watching "Loading" for up to SOURCES.length ×
+   * FETCH_TIMEOUT_MS — measured at 16s — with a complete roster sitting in
+   * localStorage the whole time.
+   *
+   * @returns the cached source's name, or null when there was nothing to show.
+   */
+  private primeFromCache(): string | null {
+    const cached = loadCachedRoster();
+    if (!cached) return null;
+    this.adoptRoster(cached.heroes, `${cached.source} (cached)`);
+    return cached.source;
+  }
+
   async load(): Promise<void> {
     if (this.fetching) return;
     this.fetching = true;
-    this.setStatus('Syncing live roster…');
+    // Only onto an empty screen: a manual refresh must not replace the roster
+    // already displayed with an older cached copy of it.
+    const primed = this.heroes.length ? null : this.primeFromCache();
+    this.setStatus(primed ? 'Cached roster — checking for updates…' : 'Syncing live roster…');
     const failed = new Set<string>();
     let lastError: unknown;
     try {
@@ -210,6 +232,8 @@ export class OracleStore {
         try {
           const heroes = await fetchRoster(source);
           runInAction(() => {
+            // adoptRoster keeps the pick already on screen, so replacing a
+            // primed roster with the live one does not re-roll under the user.
             this.adoptRoster(heroes, source.name);
             this.setStatus(`Live roster · ${source.name}`, 'live');
           });
@@ -224,11 +248,10 @@ export class OracleStore {
         }
       }
 
-      const cached = this.heroes.length ? null : loadCachedRoster();
       runInAction(() => {
-        if (cached) {
-          this.adoptRoster(cached.heroes, `${cached.source} (cached)`);
-          this.setStatus(`Cached roster · ${cached.source}`, 'error');
+        if (primed) {
+          // Already on screen — say that it is all we have.
+          this.setStatus(`Cached roster · ${primed}`, 'error');
         } else if (this.heroes.length) {
           // A failed manual refresh keeps whatever roster is already on screen.
           this.setStatus('Refresh failed — keeping current roster', 'error');
@@ -237,7 +260,7 @@ export class OracleStore {
           this.mode = 'offline';
         }
       });
-      if (!cached) console.error('Could not load a hero feed:', lastError);
+      if (!primed) console.error('Could not load a hero feed:', lastError);
     } finally {
       runInAction(() => { this.fetching = false; });
     }

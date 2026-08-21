@@ -146,6 +146,15 @@ best-effort: if it fails you lose a filter and a colour, never the roster.
   the search box then announces batches of them.
 - **The `Space` shortcut deliberately skips** when a button, link or input has
   focus, so it does not shadow that control's own activation.
+- **The roster cache is painted first, not last.** `load()` calls
+  `primeFromCache()` synchronously, before its first `await`, so a returning
+  visitor has a usable roster on the same tick. It used to be the last resort,
+  read only once every source had exhausted `FETCH_TIMEOUT_MS` — measured at 16s
+  of "Loading" with a complete roster already in `localStorage`. Two
+  consequences: the live feed arriving means `adoptRoster()` runs a *second*
+  time, which is safe only because it keeps the pick already on screen; and
+  priming is skipped when a roster is already displayed, so a manual refresh
+  never replaces live data with an older copy of itself.
 - **Two `localStorage` keys**: `draftOracle_v1` (settings/history) and
   `draftOracle_v1_roster` (the offline roster cache). Reading either can throw in
   private mode — every access is already wrapped.
@@ -191,8 +200,9 @@ clean) — though steps 1, 7 and 8 now have automated cover:
 7. **Copy draw link** → open the URL in a new tab → the same draw appears labelled
    `SHARED DRAW`, and it does not add to the draw log.
 8. Reload → exclusions, recents, draw log, squad size and filters all survive.
-9. Offline (devtools → Network → Offline) → refresh → falls back to the cached
-   roster instead of hanging.
+9. Offline (devtools → Network → Offline) → refresh → the cached roster appears
+   immediately, not after the feeds time out, and the status pill settles on
+   `Cached roster · …` once they do.
 
 ## Shipping it
 

@@ -25,7 +25,7 @@ import { cssUrl } from '../src/lib/css.ts';
 // The store is not pure: it reads localStorage and writes the URL. These shims
 // stand in for the browser so it can be exercised here. The import has to come
 // before the store's, which constructs a singleton as it is evaluated.
-import { resetBrowser, restoreFetch, stubFetch } from './browser-shims.mjs';
+import { resetBrowser, restoreFetch, storage, stubFetch } from './browser-shims.mjs';
 import { OracleStore } from '../src/store/OracleStore.ts';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -44,6 +44,12 @@ const check = (label, ok, detail = '') => {
   if (!ok) failures++;
 };
 const section = (name) => console.log(`\n— ${name} —`);
+/** Run something whose failure path logs on purpose, without the noise. */
+const quietly = async (run) => {
+  const spoke = console.error;
+  console.error = () => {};
+  try { return await run(); } finally { console.error = spoke; }
+};
 
 /** A complete, valid Hero; override just the field under test. */
 const hero = (over = {}) => ({
@@ -330,6 +336,92 @@ const shrunk = new OracleStore();
 await shrunk.load();
 check('an exclusion for a hero the roster dropped is pruned', !shrunk.excluded.has('seven'), [...shrunk.excluded].join(','));
 check('exclusions the roster still has are kept', shrunk.excluded.has('bebop'));
+
+/* ── Cache-first loading ──
+   The cached roster used to be the last resort, read only after every source
+   had exhausted FETCH_TIMEOUT_MS — a returning visitor waited a measured 16s
+   staring at "Loading" with a complete roster already in localStorage. It is
+   now painted first and replaced when the network answers, which puts a second
+   adoptRoster() pass on the hot path: these checks are mostly about that pass
+   not disturbing what the first one put on screen. */
+section('cache-first loading');
+
+// Warm the cache with a successful load, then keep only the roster half of it.
+resetBrowser();
+stubFetch(feed);
+const warming = new OracleStore();
+await warming.load();
+check('a successful load writes the roster cache', storage.has('draftOracle_v1_roster'));
+
+resetBrowser({ keepStorage: true });
+storage.delete('draftOracle_v1');
+stubFetch('fail');
+const offlineStart = new OracleStore();
+const pendingLoad = quietly(() => offlineStart.load());
+// The prime runs before load() reaches its first await, so this is observable
+// without waiting for the network at all — which is the entire point.
+check('the cached roster is on screen before any feed answers',
+  offlineStart.heroes.length === rosterIds.length && offlineStart.mode === 'draw',
+  `${offlineStart.heroes.length} heroes, mode=${offlineStart.mode}`);
+check('and it has already drawn from it', offlineStart.squad.length === 1, squadIds(offlineStart));
+check('the status says it is provisional', /checking for updates/.test(offlineStart.statusMessage), offlineStart.statusMessage);
+await pendingLoad;
+check('when every feed fails the cached roster simply stays', offlineStart.mode === 'draw' && offlineStart.heroes.length === rosterIds.length);
+check('and the status settles on the cached source', offlineStart.statusMessage.startsWith('Cached roster ·') && offlineStart.statusKind === 'error',
+  `${offlineStart.statusMessage} (${offlineStart.statusKind})`);
+
+// Cache primes, then the live feed answers and takes over.
+resetBrowser({ keepStorage: true });
+storage.delete('draftOracle_v1');
+stubFetch(feed);
+const primedLive = new OracleStore();
+await primedLive.load();
+check('a live feed replaces the primed roster', primedLive.statusKind === 'live' && primedLive.source === SOURCES[0].name,
+  `${primedLive.statusMessage} (${primedLive.source})`);
+check('priming then going live records exactly one draw', primedLive.pickCount === 1, String(primedLive.pickCount));
+check('and keeps the hero the primed roster drew', primedLive.squad.length === 1 && primedLive.mode === 'draw', squadIds(primedLive));
+
+// A roster that shrank upstream must not leave the primed copy behind.
+resetBrowser({ keepStorage: true });
+storage.delete('draftOracle_v1');
+stubFetch(feed.filter((entry) => entry.name !== 'seven'));
+const shrunkLive = new OracleStore();
+await shrunkLive.load();
+check('the live roster replaces the primed one wholesale', shrunkLive.heroes.length === rosterIds.length - 1,
+  `${shrunkLive.heroes.length} heroes`);
+check('a hero dropped upstream is gone from the roster', !shrunkLive.heroes.some((member) => member.id === 'seven'));
+
+// A share link opened against a primed roster is still somebody else's draw.
+resetBrowser({ hash: '#squad=haze,lash', state: null, keepStorage: true });
+storage.delete('draftOracle_v1');
+stubFetch(feed);
+const primedShare = new OracleStore();
+await primedShare.load();
+check('a share link survives the prime-then-live handover', squadIds(primedShare) === 'haze,lash', squadIds(primedShare));
+check('and is still labelled SHARED DRAW', primedShare.shared && primedShare.stageLabel.includes('SHARED DRAW'), primedShare.stageLabel);
+
+// A manual refresh that fails keeps the live roster, and does not fall back to
+// an older cached copy of it.
+resetBrowser();
+stubFetch(feed);
+const refreshFails = new OracleStore();
+await refreshFails.load();
+const liveCount = refreshFails.heroes.length;
+stubFetch('fail');
+await quietly(() => refreshFails.load());
+check('a failed refresh keeps the roster on screen', refreshFails.heroes.length === liveCount && refreshFails.mode === 'draw');
+check('a failed refresh says so rather than claiming a cache', refreshFails.statusMessage === 'Refresh failed — keeping current roster',
+  refreshFails.statusMessage);
+
+// Nothing cached and nothing reachable is still the offline stage.
+resetBrowser();
+stubFetch('fail');
+const nothing = new OracleStore();
+await quietly(() => nothing.load());
+check('no cache and no network is the offline stage', nothing.mode === 'offline' && nothing.heroes.length === 0, nothing.mode);
+check('the offline stage explains itself', nothing.announcement.includes('Live roster unavailable'), nothing.announcement);
+
+restoreFetch();
 
 /* ── What the screen reader is told ──
    The stage heading is keyed on the draw, so it is replaced rather than
