@@ -24,6 +24,8 @@ or a whole six-stack.
   romanizations, so `火男` and `infa-nasu` both find Infernus.
 - **Per-hero colour** — the stage takes on the drawn hero's own accent colour.
 - **Draw log** — a lifetime tally of what the oracle actually favours.
+- **Works offline** — a service worker keeps the app shell on disk, and the
+  roster is cached, so a reload with no connection still draws you a hero.
 - Everything persists in `localStorage`. <kbd>Space</kbd> rerolls.
 
 ## Run it

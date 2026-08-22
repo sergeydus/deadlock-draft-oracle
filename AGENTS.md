@@ -38,9 +38,11 @@ that mentions no version at all.
 | `src/lib/` | Pure logic, no DOM and no store: `feed` (parsing), `random` (seeded draws), `pool` (filters), `roster` (fetch + merge), `storage`, `share`, `css`. |
 | `src/components/` | Presentation only. Every component is an `observer`. |
 | `src/styles.css` | **Plain global stylesheet, not CSS Modules.** See below. |
-| `public/` | Favicon, touch icon and the `og.png` share card. Copied into `dist/` verbatim. |
+| `public/` | Favicon, touch icon, the `og.png` share card and `sw.js`. Copied into `dist/` verbatim. |
+| `public/sw.js` | The offline shell. Plain JS on purpose — `public/` is not compiled. |
 | `scripts/test.mjs` | `npm test` entry point; picks the Node flags, then runs the harness. |
 | `scripts/verify.mjs` | The checks themselves — see *Verifying a change*. |
+| `scripts/sw-harness.mjs` | A `ServiceWorkerGlobalScope` small enough to run `public/sw.js` under node. |
 
 ## The five rules
 
@@ -159,6 +161,13 @@ best-effort: if it fails you lose a filter and a colour, never the roster.
   either: `vite preview` redirects the origin root back to the app (302) where
   Pages returns 404, so a root-relative link looks like it works. The static
   check is what actually guards it.
+  Attributes are only half of it: a URL passed to `serviceWorker.register`,
+  `fetch` or `new URL` is just as absolute and just as invisible. `npm test`
+  scans those call sites too, across `src/` **and** `public/`. It is
+  deliberately a list of call sites rather than "any string starting with
+  `/`" — the broad version flags route patterns, regexes and CSS paths, and a
+  guard that cries wolf gets deleted. Add your call site to the list when you
+  introduce one.
 - **The stage owns the app's draw announcement.** The `<h1>` is keyed on the draw,
   so it is replaced rather than updated and no assistive tech reads it. One
   `role="status"` node in `HeroStage` says what was drawn, and it includes the
@@ -188,6 +197,26 @@ best-effort: if it fails you lose a filter and a colour, never the roster.
   1200x630 the tags claim. Everything else — including the two icon `<link>`s —
   stays relative.
 - **Recents persist as `{id, name}`, not whole heroes.** Only those two fields are ever read — the id keeps a hero out of the next draw, the name labels the chip — and storing full records meant every field added to `Hero` made `isHeroRecord` reject the saved list. The name is kept rather than resolved from the roster on purpose: with no roster and no cache, it is the only thing the chips have left to show. A list written by the old schema still loads, since a full `Hero` satisfies `isRecentPick`.
+- **The service worker caches the shell and nothing else.** It only ever runs
+  in production — never under `npm run dev` or `npm run preview` — which is the
+  same blind spot that shipped an `href="/"` to a 404, so
+  `scripts/sw-harness.mjs` runs the real `public/sw.js` under node and
+  `npm test` drives it through install, activate and fetch.
+  Three things are load-bearing. **Registration is `'./sw.js'`**, resolved
+  against the document, which is the deployed directory; `'/sw.js'` fails its
+  scope check outright, and `import.meta.url` would resolve against the hashed
+  bundle in `assets/` and scope the worker to a directory no navigation ever
+  reaches. **Cross-origin requests are passed straight through**, which is what
+  keeps the worker out of the store's way: the roster has exactly one cache, in
+  `localStorage`, with one set of rules about how far to trust it, and hero
+  portraits are not worth carrying without a roster. **Navigations are
+  network-first**, because Pages already serves this HTML with `max-age=600`;
+  answering them from the worker's cache as well would put a deploy an unbounded
+  distance from its audience. The cache is the offline fallback only.
+  Vite hashes the bundle, so the worker cannot name it at author time — install
+  fetches the shell and precaches exactly what it references. Bump `CACHE` when
+  the caching behaviour changes; content staleness is already handled by those
+  hashed names.
 - **Two `localStorage` keys**: `draftOracle_v1` (settings/history) and
   `draftOracle_v1_roster` (the offline roster cache). Reading either can throw in
   private mode — every access is already wrapped.

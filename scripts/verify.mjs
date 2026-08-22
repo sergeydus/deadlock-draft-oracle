@@ -26,6 +26,7 @@ import { cssUrl } from '../src/lib/css.ts';
 // stand in for the browser so it can be exercised here. The import has to come
 // before the store's, which constructs a singleton as it is evaluated.
 import { resetBrowser, restoreFetch, storage, stubFetch } from './browser-shims.mjs';
+import { loadWorker, SHELL_HTML } from './sw-harness.mjs';
 import { OracleStore } from '../src/store/OracleStore.ts';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -917,12 +918,93 @@ check('a favicon and a touch icon ship with it',
    root — so this check is the only thing between that bug and production. */
 section('subpath safety');
 
-const rootRelative = walk(join(root, 'src'))
-  .filter((file) => /\.tsx?$/.test(file))
-  .flatMap((file) => [...readFileSync(file, 'utf8').matchAll(/(?:href|src|action)=["']\/(?!\/)[^"']*["']/g)]
-    .map((match) => `${file.slice(root.length + 1)} ${match[0]}`));
+const sources = [...walk(join(root, 'src')), ...walk(join(root, 'public'))]
+  .filter((file) => /\.(tsx?|js)$/.test(file))
+  .map((file) => [file.slice(root.length + 1), readFileSync(file, 'utf8')]);
+
+/** Every match of `pattern`, labelled with the file it came from. */
+const offenders = (pattern) => sources.flatMap(([name, text]) =>
+  [...text.matchAll(pattern)].map((match) => `${name} ${match[0].replace(/\s+/g, ' ')}`));
+
+const rootRelative = offenders(/(?:href|src|action)=["']\/(?!\/)[^"']*["']/g);
 check('no component builds a root-relative URL', rootRelative.length === 0,
   rootRelative.length ? rootRelative.join('; ') : 'every link is relative to the deployed base');
+
+// Markup attributes are only half of it. A URL handed to an API is just as
+// absolute and just as invisible to `base: './'` — and a service worker
+// registered at `/sw.js` fails its scope check outright on Pages rather
+// than merely 404ing. Deliberately call-site targeted: a bare "string
+// starting with /" scan would flag route patterns, regexes and CSS paths,
+// and a guard that cries wolf gets deleted. Add a call site here when you
+// introduce one.
+const rootRelativeCalls = offenders(
+  /(?:serviceWorker\.register|caches\.match|new URL|fetch|importScripts)\s*\(\s*['"`]\/(?!\/)[^'"`]*['"`]/g);
+check('no runtime call asks the origin root', rootRelativeCalls.length === 0,
+  rootRelativeCalls.length
+    ? `${rootRelativeCalls.join('; ')} — use a './' path, resolved against the document`
+    : 'every runtime URL resolves against the deployed base');
+
+/* ── Offline shell ──
+   The service worker only ever runs in production: never under `npm run dev`,
+   never under `npm run preview`. That is the same blind spot that shipped an
+   href="/" to a 404, so grepping it is not enough — scripts/sw-harness.mjs
+   runs the real public/sw.js and these drive it.
+
+   The invariants worth holding: the app shell works offline, and the worker
+   keeps its hands off the roster feeds, which the store already caches and
+   knows how far to trust. */
+section('offline shell');
+
+const SW_SCOPE = 'https://example.test/deadlock-draft-oracle/';
+let swOnline = true;
+const swNetwork = (url) => {
+  if (!swOnline) return 'offline';
+  if (url === SW_SCOPE) return new Response(SHELL_HTML, { headers: { 'Content-Type': 'text/html' } });
+  if (url.startsWith(SW_SCOPE)) return new Response('asset', { headers: { 'Content-Type': 'text/plain' } });
+  return new Response('not found', { status: 404 });
+};
+
+const worker = loadWorker({ scope: SW_SCOPE, network: swNetwork });
+await worker.install();
+await worker.activate();
+const shelved = [...(await worker.self.caches.open('draft-oracle-shell-v1')).entries.keys()];
+
+check('the shell document is precached', shelved.includes(SW_SCOPE), shelved.length + ' entries');
+// Vite emits the bundle under a content hash, so the worker has to read the
+// shell to learn its name. If this breaks, the offline app is HTML with no app.
+check('the hashed bundle and stylesheet came with it',
+  shelved.some((url) => url.endsWith('.js')) && shelved.some((url) => url.endsWith('.css')),
+  shelved.map((url) => url.slice(SW_SCOPE.length)).join(' '));
+check('the 118KB share card did not', !shelved.some((url) => url.includes('og.png')));
+check('and nothing cross-origin did', shelved.every((url) => url.startsWith(SW_SCOPE)));
+check('activating claims the open page', worker.calls.claim === 1 && worker.calls.skipWaiting === 1);
+
+// Passing cross-origin requests through is what keeps the worker out of the
+// store's way: the roster has one cache, in localStorage, with one set of rules.
+check('a roster feed is passed straight through',
+  (await worker.request('https://api.deadlock-api.com/v1/heroes')) === null);
+check('a hero portrait is passed straight through',
+  (await worker.request('https://assets.deadlock-api.com/hero.png')) === null);
+check('a non-GET is passed straight through',
+  (await worker.request(SW_SCOPE, { method: 'POST' })) === null);
+
+// Pages serves this HTML with max-age=600. Serving it from the worker's cache
+// as well would put a deploy an unbounded distance from its audience.
+swOnline = true;
+const swFresh = await worker.request(SW_SCOPE, { mode: 'navigate' });
+check('a navigation online is answered from the network', swFresh?.status === 200);
+
+swOnline = false;
+const swOffline = await worker.request(SW_SCOPE, { mode: 'navigate' });
+check('a navigation offline falls back to the shell', swOffline?.status === 200);
+check('and it is the real document', (await swOffline.text()).includes('id="root"'));
+check('a hashed asset offline comes from the cache',
+  (await worker.request(SW_SCOPE + 'assets/index-def456.js'))?.status === 200);
+// Share links are the point of the app, and a recipient on a train is exactly
+// who needs the shell to load without the network.
+check('a share link offline still gets the shell',
+  (await worker.request(SW_SCOPE + '#squad=haze', { mode: 'navigate' }))?.status === 200);
+
 
 /* ── Live feeds through the shipped parser ── */
 
