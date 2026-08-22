@@ -259,10 +259,10 @@ npm run typecheck     # tsc --noEmit, strict
 ```
 
 `scripts/verify.mjs` imports `src/**` directly and runs under plain `node` via
-native TypeScript stripping — no test runner, no build. That requires **Node 23.6+**,
-or 22.6+ with `--experimental-strip-types`, which `scripts/test.mjs` supplies for
-you (CI pins 24). It is why `src/lib` imports use explicit `.ts` extensions: Node's ESM
-resolver requires them.
+native TypeScript stripping — no test runner, no build. The floor is **Node 22.6**,
+which `package.json` declares; `scripts/test.mjs` adds `--experimental-strip-types`
+below 23.6, where stripping is still behind a flag (CI pins 24). It is why
+`src/lib` imports use explicit `.ts` extensions: Node's ESM resolver requires them.
 
 CI (`.github/workflows/ci.yml`) splits deliberately:
 
@@ -278,7 +278,8 @@ untested is how the share-hash bug survived a suite that covered every pure piec
 it was built from. Import the shims *before* the store.
 
 None of that renders a page, so this manual list still matters (console must stay
-clean) — though steps 1, 7 and 8 now have automated cover:
+clean) — though steps 1 and 7 through 9 now have automated cover. Step 10 has
+none, which is the point of it:
 
 1. Roster loads, status pill goes green, a hero is drawn automatically.
 2. `Space` and **PICK MY HERO** both draw; the art crossfades with no empty flash
@@ -293,9 +294,17 @@ clean) — though steps 1, 7 and 8 now have automated cover:
 7. **Copy draw link** → open the URL in a new tab → the same draw appears labelled
    `SHARED DRAW`, and it does not add to the draw log.
 8. Reload → exclusions, recents, draw log, squad size and filters all survive.
-9. Offline (devtools → Network → Offline) → refresh → the cached roster appears
-   immediately, not after the feeds time out, and the status pill settles on
-   `Cached roster · …` once they do.
+9. Offline (devtools → Network → Offline) → refresh. Two separate things have to
+   work: the **shell** loads at all, which is the service worker's cache, and a
+   hero is drawn from the **roster** cache in `localStorage` — appearing
+   immediately rather than after the feeds time out, with the status pill
+   settling on `Cached roster · …` once they do. Before the worker existed only
+   the second half was ours; the first was whatever the browser had kept.
+10. After a deploy: load the live site, wait, then reload twice. The second
+    reload should be running the new build. `sw.js` is usually byte-identical
+    between builds, so the worker is not reinstalled — it picks the new build up
+    through a navigation, which is the path worth eyeballing by hand until the
+    browser E2E is committed.
 
 ## Shipping it
 
