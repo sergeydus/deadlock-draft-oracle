@@ -19,8 +19,15 @@ the migration was done as groundwork for an online-lobby mode.
 npm install
 npm run dev        # http://localhost:5173
 npm run build      # typecheck + production bundle into dist/
-npm run preview    # serve the built bundle
+npm run preview    # serve the built bundle at the origin root
+npm run preview:subpath   # …and at the /deadlock-draft-oracle/ path Pages uses
 ```
+
+Needs Node 22.6+, and runs without a flag from 23.6 (CI pins 24, and `.nvmrc`
+names it). `npm test` goes through
+`scripts/test.mjs`, which adds `--experimental-strip-types` on Node 22.6–23.5 and
+otherwise says what to install — the raw failure is an `ERR_UNKNOWN_FILE_EXTENSION`
+that mentions no version at all.
 
 ## File map
 
@@ -31,7 +38,9 @@ npm run preview    # serve the built bundle
 | `src/lib/` | Pure logic, no DOM and no store: `feed` (parsing), `random` (seeded draws), `pool` (filters), `roster` (fetch + merge), `storage`, `share`, `css`. |
 | `src/components/` | Presentation only. Every component is an `observer`. |
 | `src/styles.css` | **Plain global stylesheet, not CSS Modules.** See below. |
-| `scripts/verify.mjs` | `npm test` — see *Verifying a change*. |
+| `public/` | Favicon, touch icon and the `og.png` share card. Copied into `dist/` verbatim. |
+| `scripts/test.mjs` | `npm test` entry point; picks the Node flags, then runs the harness. |
+| `scripts/verify.mjs` | The checks themselves — see *Verifying a change*. |
 
 ## The five rules
 
@@ -82,7 +91,7 @@ derived invalidates every saved `localStorage` and every share link in the wild.
 
 **Neither feed carries every field.** `deadlock-api` has `role` and `accent`;
 `deadlock.io` has the 17-language names and search aliases. So the store loads a
-base roster from the first source that answers, then `enrichRoster()` fetches the
+base roster from the first source that answers, then `OracleStore.enrich()` fetches the
 *other* source in the background and fills in the blanks, merged by `id`. It is
 best-effort: if it fails you lose a filter and a colour, never the roster.
 
@@ -92,9 +101,11 @@ best-effort: if it fails you lose a filter and a colour, never the roster.
 |---|---|
 | New filter on the draw pool | `PoolCriteria` + `eligibleHeroes()` in `lib/pool.ts`, a field and getter on the store, a control in `SettingsPanel` |
 | New persisted setting | `PersistedState` in `lib/storage.ts` → `restore()`/`persist()` on the store |
+| Something new in recents | `RecentPick` in `types.ts` — keep it to what the chip renders |
 | New feed source | Append to `SOURCES`; verify `normalise()` handles its field names |
 | Use another feed field | `Hero` → `normalise()` → `isHeroRecord()` → `MERGEABLE_FIELDS` |
 | Change the stage | `components/HeroStage.tsx` only |
+| Change what a draw announces | `announcement` getter on the store |
 
 ## Gotchas
 
@@ -122,8 +133,61 @@ best-effort: if it fails you lose a filter and a colour, never the roster.
 - **Share links carry hero ids, not the seed** (`#squad=id1,id2,…`). A seed only
   reproduces a draw against an identical pool; ids are exact for every recipient. A
   draw restored from a link is *not* recorded in recents or the tally.
+- **Every roll writes the hash too, so the hash alone cannot say who wrote it.**
+  `writeHash()` therefore stamps `history.state` with a marker naming the exact
+  hash it wrote, and `isOwnHash()` compares the two; only a hash without a
+  matching marker is treated as somebody else's draw. The marker survives a
+  reload and is absent on a fresh navigation, which is the whole trick. Without
+  it a reload relabelled your own pick `SHARED DRAW`, suppressed the opening
+  draw, and could hand back a hero you had excluded. **Bind the marker to the
+  hash being written, never to `location.hash`** — that is still the previous
+  value while `replaceState` runs, and a marker that never matches restores the
+  bug silently.
+  The marker means exactly *this tab produced the draw this hash describes* —
+  not "the app has seen this hash". So `commitDraw()` writes the hash only when
+  `record` is true, and `copyLink()` only when the draw is not already shared:
+  a received link keeps the sender's hash untouched and still reads as
+  `SHARED DRAW` after a reload. Rolling or rerolling afterwards makes the draw
+  this tab's own, and the next reload opens with a fresh draw as usual.
+- **A root-relative URL breaks in production only.** The app is served from a repo
+  subpath, so `href="/"` leaves the site; `base: './'` cannot help, because Vite
+  rewrites index.html and imported assets but never a runtime attribute. Neither
+  `npm run dev` nor `npm run preview` reproduces it — both serve from the origin
+  root — so `npm test` asserts no component builds one.
+  `npm run preview:subpath` mounts the build where Pages does and is the way to
+  check anything base-related by hand, but it does not reproduce *this* bug
+  either: `vite preview` redirects the origin root back to the app (302) where
+  Pages returns 404, so a root-relative link looks like it works. The static
+  check is what actually guards it.
+- **The stage owns the app's draw announcement.** The `<h1>` is keyed on the draw,
+  so it is replaced rather than updated and no assistive tech reads it. One
+  `role="status"` node in `HeroStage` says what was drawn, and it includes the
+  pick number so that two identical draws in a row still change the text. Do not
+  put `aria-live` back on `.roster-grid`: it holds every card, and a keystroke in
+  the search box then announces batches of them.
 - **The `Space` shortcut deliberately skips** when a button, link or input has
   focus, so it does not shadow that control's own activation.
+- **The roster cache is painted first, not last.** `load()` calls
+  `primeFromCache()` synchronously, before its first `await`, so a returning
+  visitor has a usable roster on the same tick. It used to be the last resort,
+  read only once every source had exhausted `FETCH_TIMEOUT_MS` — measured at 16s
+  of "Loading" with a complete roster already in `localStorage`. Two
+  consequences. The live feed arriving means `adoptRoster()` runs a *second*
+  time, so it takes an `authoritative` flag: a **provisional** roster does
+  nothing irreversible. It does not prune saved ids — the cache can predate a
+  hero, and pruning against it deletes that hero’s exclusion for good — and it
+  does not bank its opening draw, which may name someone the live roster no
+  longer has. Both happen when a feed confirms the roster, or when every feed
+  has failed and the cache becomes all there is. Priming is also skipped when a
+  roster is already displayed, so a manual refresh never replaces live data
+  with an older copy of itself.
+- **The social-card URLs are the one exception to the relative-URL rule.** A
+  crawler reading `og:image` has no document to resolve it against, so that tag
+  and `og:url` are absolute and hardcoded to the deployed `homepage`. `npm test`
+  asserts they still match `package.json` and that `og.png` is really the
+  1200x630 the tags claim. Everything else — including the two icon `<link>`s —
+  stays relative.
+- **Recents persist as `{id, name}`, not whole heroes.** Only those two fields are ever read — the id keeps a hero out of the next draw, the name labels the chip — and storing full records meant every field added to `Hero` made `isHeroRecord` reject the saved list. The name is kept rather than resolved from the roster on purpose: with no roster and no cache, it is the only thing the chips have left to show. A list written by the old schema still loads, since a full `Hero` satisfies `isRecentPick`.
 - **Two `localStorage` keys**: `draftOracle_v1` (settings/history) and
   `draftOracle_v1_roster` (the offline roster cache). Reading either can throw in
   private mode — every access is already wrapped.
@@ -137,8 +201,9 @@ npm run typecheck     # tsc --noEmit, strict
 ```
 
 `scripts/verify.mjs` imports `src/**` directly and runs under plain `node` via
-native TypeScript stripping — no test runner, no build. That requires **Node 23.6+**
-(CI pins 24). It is why `src/lib` imports use explicit `.ts` extensions: Node's ESM
+native TypeScript stripping — no test runner, no build. That requires **Node 23.6+**,
+or 22.6+ with `--experimental-strip-types`, which `scripts/test.mjs` supplies for
+you (CI pins 24). It is why `src/lib` imports use explicit `.ts` extensions: Node's ESM
 resolver requires them.
 
 CI (`.github/workflows/ci.yml`) splits deliberately:
@@ -149,8 +214,12 @@ CI (`.github/workflows/ci.yml`) splits deliberately:
   it retries once and then opens or comments on a `feed-canary` issue. That nightly
   run is the point: it is how you learn a roster API moved before your users do.
 
+`scripts/browser-shims.mjs` supplies the browser globals the store needs — it is
+not pure, and leaving it untested is how the share-hash bug survived a suite that
+covered every piece it is built from. Import those shims *before* the store.
+
 None of that renders a page, so this manual list still matters (console must stay
-clean):
+clean) — though steps 1, 7 and 8 now have automated cover:
 
 1. Roster loads, status pill goes green, a hero is drawn automatically.
 2. `Space` and **PICK MY HERO** both draw; the art crossfades with no empty flash
@@ -165,8 +234,9 @@ clean):
 7. **Copy draw link** → open the URL in a new tab → the same draw appears labelled
    `SHARED DRAW`, and it does not add to the draw log.
 8. Reload → exclusions, recents, draw log, squad size and filters all survive.
-9. Offline (devtools → Network → Offline) → refresh → falls back to the cached
-   roster instead of hanging.
+9. Offline (devtools → Network → Offline) → refresh → the cached roster appears
+   immediately, not after the feeds time out, and the status pill settles on
+   `Cached roster · …` once they do.
 
 ## Shipping it
 

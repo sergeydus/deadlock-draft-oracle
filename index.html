@@ -6,6 +6,29 @@
     <meta name="theme-color" content="#111318" />
     <title>Deadlock Draft Oracle</title>
     <meta name="description" content="Randomize your next Deadlock hero — solo or a full squad of six." />
+
+    <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="./apple-touch-icon.png" />
+
+    <!-- Share links are the point of this app, and until now every one of them
+         unfurled as a bare URL. These are the one place the project cannot use
+         a relative path: a crawler has no document to resolve them against, so
+         og:url and og:image must be absolute. Keep them in step with
+         `homepage` in package.json — npm test asserts they match. -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Deadlock Draft Oracle" />
+    <meta property="og:title" content="Deadlock Draft Oracle" />
+    <meta property="og:description" content="Randomize your next Deadlock hero — solo or a full squad of six, drawn from the live community roster." />
+    <meta property="og:url" content="https://sergeydus.github.io/deadlock-draft-oracle/" />
+    <meta property="og:image" content="https://sergeydus.github.io/deadlock-draft-oracle/og.png" />
+    <meta property="og:image:type" content="image/png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="Deadlock Draft Oracle — randomize your next hero, solo or a full squad of six." />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Deadlock Draft Oracle" />
+    <meta name="twitter:description" content="Randomize your next Deadlock hero — solo or a full squad of six, drawn from the live community roster." />
+    <meta name="twitter:image" content="https://sergeydus.github.io/deadlock-draft-oracle/og.png" />
     <link rel="preconnect" href="https://deadlock.io" />
     <link rel="preconnect" href="https://assets.deadlock-api.com" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />

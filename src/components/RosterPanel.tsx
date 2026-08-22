@@ -45,12 +45,16 @@ export const RosterPanel = observer(function RosterPanel() {
           />
         </div>
       </div>
-      <div className="roster-grid" aria-live="polite">
+      {/* Not aria-live: this holds every hero card, and each keystroke in the
+          search box re-renders the lot, so marking it live made typing read out
+          batches of cards. The count below says the useful part instead. */}
+      <div className="roster-grid">
         {heroes.map((hero) => <HeroCard hero={hero} key={hero.id} />)}
         {!heroes.length && store.heroes.length > 0 && (
           <p className="empty-roster">No hero matches that signal.</p>
         )}
       </div>
+      <p className="visually-hidden" role="status" aria-live="polite">{store.rosterAnnouncement}</p>
     </div>
   );
 });

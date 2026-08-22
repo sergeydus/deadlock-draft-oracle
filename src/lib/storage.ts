@@ -5,11 +5,11 @@
  * and every access can throw in private mode.
  */
 import { COMPLEXITY_LEVELS, MAX_SQUAD, RECENT_LIMIT, ROLE_ORDER, ROSTER_KEY, STORAGE_KEY } from '../constants.ts';
-import type { CachedRoster, Hero } from '../types.ts';
+import type { CachedRoster, Hero, RecentPick } from '../types.ts';
 
 export interface PersistedState {
   excluded: string[];
-  recent: Hero[];
+  recent: RecentPick[];
   tally: Record<string, number>;
   pickCount: number;
   squadSize: number;
@@ -25,6 +25,20 @@ export interface PersistedState {
  * before they existed is rejected and refetched rather than silently disabling
  * the filters.
  */
+/**
+ * Guard for a persisted recents entry.
+ *
+ * Deliberately narrower than `isHeroRecord`: a list written by any older
+ * version passes, because a full `Hero` record already has both fields, so the
+ * migration needs no version check — it just reads less than it used to.
+ */
+export function isRecentPick(pick: unknown): pick is RecentPick {
+  if (pick === null || typeof pick !== 'object') return false;
+  const value = pick as Record<string, unknown>;
+  return typeof value.id === 'string' && value.id.length > 0
+    && typeof value.name === 'string' && value.name.trim().length > 0;
+}
+
 export function isHeroRecord(hero: unknown): hero is Hero {
   if (hero === null || typeof hero !== 'object') return false;
   const value = hero as Record<string, unknown>;
@@ -55,7 +69,13 @@ export function loadState(): Partial<PersistedState> {
     const data = JSON.parse(raw);
     const out: Partial<PersistedState> = {};
     if (Array.isArray(data.excluded)) out.excluded = data.excluded.filter((id: unknown) => typeof id === 'string');
-    if (Array.isArray(data.recent)) out.recent = data.recent.filter(isHeroRecord).slice(0, RECENT_LIMIT);
+    if (Array.isArray(data.recent)) {
+      // Narrowed on the way in, so a list saved as whole Hero records is
+      // rewritten in the small shape the next time anything persists.
+      out.recent = data.recent.filter(isRecentPick)
+        .map(({ id, name }: RecentPick) => ({ id, name }))
+        .slice(0, RECENT_LIMIT);
+    }
     if (data.tally && typeof data.tally === 'object') {
       out.tally = Object.fromEntries(
         Object.entries(data.tally as Record<string, unknown>)

@@ -868,6 +868,23 @@ kbd {
   transform: translate(-50%, 0);
 }
 
+/* ── Accessibility: screen-reader-only text ──
+   The stage and the roster each carry one live region that says what changed.
+   Clip rather than `display: none`, which would take it out of the tree and
+   stop it being announced at all. */
+
+.visually-hidden {
+  border: 0;
+  clip-path: inset(50%);
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  padding: 0;
+  position: absolute;
+  white-space: nowrap;
+  width: 1px;
+}
+
 /* ── Accessibility: focus-visible ── */
 
 .icon-button:focus-visible,

@@ -106,7 +106,7 @@ export function normalise(raw: Raw, index: number, origin: string): Hero | null 
     || /unreleased|upcoming|test/.test(rawStatus));
 
   // These are split across the feeds — deadlock-api has role/accent, deadlock.io
-  // has the localized aliases — so enrichRoster() merges them.
+  // has the localized aliases — so the enrichment pass merges them.
   const complexity = Number.isFinite(Number(raw.complexity)) ? Number(raw.complexity) : 0;
   const role = firstText(raw.hero_type, raw.heroType, raw.role_name).toLowerCase();
   const weapon = firstText(localized(raw.gunArchetype), raw.gun_tag, raw.weapon_archetype);
@@ -126,5 +126,5 @@ export function normalise(raw: Raw, index: number, origin: string): Hero | null 
   };
 }
 
-/** Fields enrichRoster() may copy from another feed when the base one lacked them. */
+/** Fields the enrichment pass may copy from another feed when the base one lacked them. */
 export const MERGEABLE_FIELDS = ['role', 'weapon', 'accent', 'aliases', 'description', 'image'] as const;
