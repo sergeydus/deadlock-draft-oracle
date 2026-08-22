@@ -202,21 +202,43 @@ best-effort: if it fails you lose a filter and a colour, never the roster.
   same blind spot that shipped an `href="/"` to a 404, so
   `scripts/sw-harness.mjs` runs the real `public/sw.js` under node and
   `npm test` drives it through install, activate and fetch.
-  Three things are load-bearing. **Registration is `'./sw.js'`**, resolved
-  against the document, which is the deployed directory; `'/sw.js'` fails its
-  scope check outright, and `import.meta.url` would resolve against the hashed
-  bundle in `assets/` and scope the worker to a directory no navigation ever
-  reaches. **Cross-origin requests are passed straight through**, which is what
-  keeps the worker out of the store's way: the roster has exactly one cache, in
+  **Registration is `'./sw.js'`**, resolved against the document, which is the
+  deployed directory; `'/sw.js'` fails its scope check outright, and
+  `import.meta.url` would resolve against the hashed bundle in `assets/` and
+  scope the worker to a directory no navigation ever reaches.
+  **Cross-origin requests are passed straight through**, which is what keeps the
+  worker out of the store's way: the roster has exactly one cache, in
   `localStorage`, with one set of rules about how far to trust it, and hero
   portraits are not worth carrying without a roster. **Navigations are
   network-first**, because Pages already serves this HTML with `max-age=600`;
   answering them from the worker's cache as well would put a deploy an unbounded
   distance from its audience. The cache is the offline fallback only.
-  Vite hashes the bundle, so the worker cannot name it at author time — install
-  fetches the shell and precaches exactly what it references. Bump `CACHE` when
-  the caching behaviour changes; content staleness is already handled by those
-  hashed names.
+- **Scope does not extend to storage.** A worker's scope decides which URLs it
+  answers for. `CacheStorage` is origin-wide, and `sergeydus.github.io` is one
+  origin for *every* Pages project under the account. So caches are named with
+  the `draft-oracle-shell-` prefix and activation deletes only those — treating
+  "not the current cache" as "stale" would delete a neighbouring project's data.
+  For the same reason nothing reads through `caches.match()`, which searches
+  every cache on the origin and can hand back a neighbour's copy of a URL we
+  also own; open the named cache and match against that.
+- **A cache write has to be registered with `event.waitUntil()`.** Once the
+  promise passed to `respondWith()` settles, the browser is free to terminate
+  the worker, and a detached `cache.put()` is simply lost — intermittently, and
+  only in production. A fake cache that resolves instantly cannot show this, so
+  `sw-harness.mjs` models it directly: `defer()` holds writes open and
+  `background` records what the worker asked the browser to wait for.
+- **A deploy updates the shell assets-first, document-last.** `sw.js` is usually
+  byte-identical between builds, so a deployment does not reinstall the worker —
+  the running one meets the new build through an online navigation instead. If
+  it cached the new HTML and picked up the new hashes as they happened to be
+  requested, then anything ending that window early (the tab closing, the worker
+  being terminated, one asset failing) would leave a cached document naming
+  assets nobody has, and the offline app would stop booting. `adoptShell()`
+  therefore fetches everything the new document references, and only then
+  replaces the document; `addAll` is all-or-nothing, so a half-broken deploy
+  keeps the last shell that worked. The previous build's assets are dropped only
+  after the swap succeeds. Bump `CACHE` when the caching behaviour changes;
+  content staleness is already handled by the hashed names.
 - **Two `localStorage` keys**: `draftOracle_v1` (settings/history) and
   `draftOracle_v1_roster` (the offline roster cache). Reading either can throw in
   private mode — every access is already wrapped.

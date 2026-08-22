@@ -26,7 +26,7 @@ import { cssUrl } from '../src/lib/css.ts';
 // stand in for the browser so it can be exercised here. The import has to come
 // before the store's, which constructs a singleton as it is evaluated.
 import { resetBrowser, restoreFetch, storage, stubFetch } from './browser-shims.mjs';
-import { loadWorker, SHELL_HTML } from './sw-harness.mjs';
+import { loadWorker, shellHtml } from './sw-harness.mjs';
 import { OracleStore } from '../src/store/OracleStore.ts';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -950,33 +950,37 @@ check('no runtime call asks the origin root', rootRelativeCalls.length === 0,
    href="/" to a 404, so grepping it is not enough — scripts/sw-harness.mjs
    runs the real public/sw.js and these drive it.
 
-   The invariants worth holding: the app shell works offline, and the worker
-   keeps its hands off the roster feeds, which the store already caches and
-   knows how far to trust. */
+   The invariants worth holding: the app shell works offline, the worker keeps
+   its hands off the roster feeds, and it keeps its hands off the rest of the
+   origin — CacheStorage is shared by every Pages project under the account. */
 section('offline shell');
 
 const SW_SCOPE = 'https://example.test/deadlock-draft-oracle/';
-let swOnline = true;
-const swNetwork = (url) => {
-  if (!swOnline) return 'offline';
-  if (url === SW_SCOPE) return new Response(SHELL_HTML, { headers: { 'Content-Type': 'text/html' } });
-  if (url.startsWith(SW_SCOPE)) return new Response('asset', { headers: { 'Content-Type': 'text/plain' } });
+const SW_CACHE = 'draft-oracle-shell-v1';
+
+/** A site serving one build; `broken` names an asset that 404s. */
+const swSite = (build, broken = null) => (url) => {
+  if (url === SW_SCOPE) return new Response(shellHtml(build), { headers: { 'Content-Type': 'text/html' } });
+  if (broken && url.endsWith(broken)) return new Response('gone', { status: 404 });
+  if (url.startsWith(SW_SCOPE)) return new Response('body of ' + url);
   return new Response('not found', { status: 404 });
 };
+const shelved = async (worker) => [...(await worker.caches.open(SW_CACHE)).entries.keys()];
 
-const worker = loadWorker({ scope: SW_SCOPE, network: swNetwork });
+let swOnline = true;
+const worker = loadWorker({ scope: SW_SCOPE, network: (url) => (swOnline ? swSite('abc123')(url) : 'offline') });
 await worker.install();
 await worker.activate();
-const shelved = [...(await worker.self.caches.open('draft-oracle-shell-v1')).entries.keys()];
+const shelf = await shelved(worker);
 
-check('the shell document is precached', shelved.includes(SW_SCOPE), shelved.length + ' entries');
+check('the shell document is precached', shelf.includes(SW_SCOPE), shelf.length + ' entries');
 // Vite emits the bundle under a content hash, so the worker has to read the
 // shell to learn its name. If this breaks, the offline app is HTML with no app.
 check('the hashed bundle and stylesheet came with it',
-  shelved.some((url) => url.endsWith('.js')) && shelved.some((url) => url.endsWith('.css')),
-  shelved.map((url) => url.slice(SW_SCOPE.length)).join(' '));
-check('the 118KB share card did not', !shelved.some((url) => url.includes('og.png')));
-check('and nothing cross-origin did', shelved.every((url) => url.startsWith(SW_SCOPE)));
+  shelf.some((url) => url.endsWith('.js')) && shelf.some((url) => url.endsWith('.css')),
+  shelf.map((url) => url.slice(SW_SCOPE.length)).join(' '));
+check('the 118KB share card did not', !shelf.some((url) => url.includes('og.png')));
+check('and nothing cross-origin did', shelf.every((url) => url.startsWith(SW_SCOPE)));
 check('activating claims the open page', worker.calls.claim === 1 && worker.calls.skipWaiting === 1);
 
 // Passing cross-origin requests through is what keeps the worker out of the
@@ -991,19 +995,112 @@ check('a non-GET is passed straight through',
 // Pages serves this HTML with max-age=600. Serving it from the worker's cache
 // as well would put a deploy an unbounded distance from its audience.
 swOnline = true;
-const swFresh = await worker.request(SW_SCOPE, { mode: 'navigate' });
-check('a navigation online is answered from the network', swFresh?.status === 200);
+check('a navigation online is answered from the network',
+  (await worker.request(SW_SCOPE, { mode: 'navigate' }))?.status === 200);
 
 swOnline = false;
 const swOffline = await worker.request(SW_SCOPE, { mode: 'navigate' });
 check('a navigation offline falls back to the shell', swOffline?.status === 200);
 check('and it is the real document', (await swOffline.text()).includes('id="root"'));
 check('a hashed asset offline comes from the cache',
-  (await worker.request(SW_SCOPE + 'assets/index-def456.js'))?.status === 200);
+  (await worker.request(SW_SCOPE + 'assets/index-abc123.js'))?.status === 200);
 // Share links are the point of the app, and a recipient on a train is exactly
 // who needs the shell to load without the network.
 check('a share link offline still gets the shell',
   (await worker.request(SW_SCOPE + '#squad=haze', { mode: 'navigate' }))?.status === 200);
+
+/* Scope is about URLs the worker answers for. It says nothing about storage:
+   CacheStorage is origin-wide, and sergeydus.github.io is one origin for every
+   Pages project under the account. A worker that treats "not my cache" as
+   "stale" deletes a neighbouring project's data. */
+const neighbourly = loadWorker({
+  scope: SW_SCOPE,
+  network: swSite('abc123'),
+  seedCaches: {
+    'some-other-project-v3': { 'https://example.test/other/app.js': 'not ours' },
+    'draft-oracle-shell-v0': { [SW_SCOPE + 'old.js']: 'ours, stale' },
+  },
+});
+await neighbourly.install();
+await neighbourly.activate();
+const swNames = [...neighbourly.caches.stores.keys()];
+check('activation leaves a neighbouring project’s cache alone',
+  swNames.includes('some-other-project-v3'), swNames.join(', '));
+check('while still clearing our own previous version',
+  !swNames.includes('draft-oracle-shell-v0'), swNames.join(', '));
+
+// The same mistake in reverse: caches.match() reads across every cache on the
+// origin, so it can serve a neighbour's copy of a URL we also own.
+const swAsset = SW_SCOPE + 'assets/index-abc123.js';
+const crowded = loadWorker({
+  scope: SW_SCOPE,
+  network: swSite('abc123'),
+  seedCaches: { 'some-other-project-v3': { [swAsset]: 'FOREIGN COPY' } },
+});
+await crowded.install();
+await crowded.activate();
+check('an asset is read from our cache, not a neighbour’s',
+  (await (await crowded.request(swAsset)).text()) !== 'FOREIGN COPY');
+
+/* A cache write only lands if the worker is still alive to finish it. Once the
+   response promise settles the browser is free to terminate the worker, so a
+   detached put() is simply lost — and the fake cache resolving instantly is
+   exactly what would hide that. */
+const lively = loadWorker({ scope: SW_SCOPE, network: swSite('abc123') });
+await lively.install();
+await lively.activate();
+const swExtra = SW_SCOPE + 'favicon.svg';
+(await lively.caches.open(SW_CACHE)).entries.delete(swExtra); // force a miss
+lively.defer();
+await lively.request(swExtra);
+check('a runtime cache write is registered with event.waitUntil', lively.background.length > 0,
+  lively.background.length + ' background tasks');
+await lively.settle();
+check('and settling that registered work lands it',
+  (await (await lively.caches.open(SW_CACHE)).match(swExtra)) !== undefined);
+
+/* A deploy usually leaves sw.js byte-identical, so there is no reinstall: the
+   running worker meets the new build through an online navigation. If it takes
+   the new HTML before the new hashes are stored, the offline shell points at
+   assets nobody has. */
+let swBuild = 'abc123';
+const deployed = loadWorker({ scope: SW_SCOPE, network: (url) => swSite(swBuild)(url) });
+await deployed.install();
+await deployed.activate();
+swBuild = 'def456';
+await deployed.request(SW_SCOPE, { mode: 'navigate' });
+await deployed.settle();
+
+const swCache = await deployed.caches.open(SW_CACHE);
+const swHtml = await (await swCache.match(SW_SCOPE)).text();
+const swRefs = [...swHtml.matchAll(/(?:src|href)="([^"]+)"/g)]
+  .map((match) => new URL(match[1], SW_SCOPE))
+  .filter((url) => url.origin === 'https://example.test' && !url.pathname.endsWith('.png'))
+  .map((url) => url.href);
+const swMissing = [];
+for (const ref of swRefs) if (!(await swCache.match(ref))) swMissing.push(ref.slice(SW_SCOPE.length));
+check('after a deploy, every asset the cached shell names is cached too',
+  swMissing.length === 0, swMissing.length ? 'missing ' + swMissing.join(', ') : 'complete');
+check('and the previous build is not left lying around',
+  (await shelved(deployed)).filter((url) => url.endsWith('.js')).length === 1,
+  (await shelved(deployed)).map((url) => url.slice(SW_SCOPE.length)).join(' '));
+
+// The same path when the new build is only half there: better the old shell
+// that works than a new one that cannot boot.
+let swNet = swSite('abc123');
+const halfBroken = loadWorker({ scope: SW_SCOPE, network: (url) => swNet(url) });
+await halfBroken.install();
+await halfBroken.activate();
+swNet = swSite('def456', 'index-def456.js');
+await halfBroken.request(SW_SCOPE, { mode: 'navigate' });
+await halfBroken.settle();
+const keptHtml = await (await (await halfBroken.caches.open(SW_CACHE)).match(SW_SCOPE)).text();
+check('a half-broken deploy keeps the shell that works', keptHtml.includes('index-abc123.js'),
+  keptHtml.includes('def456') ? 'took the broken build' : 'kept abc123');
+swNet = () => 'offline';
+const stillBoots = await halfBroken.request(SW_SCOPE, { mode: 'navigate' });
+check('and it still boots offline',
+  stillBoots?.status === 200 && (await stillBoots.text()).includes('index-abc123.js'));
 
 
 /* ── Live feeds through the shipped parser ── */
