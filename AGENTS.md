@@ -246,6 +246,10 @@ best-effort: if it fails you lose a filter and a colour, never the roster.
   keeps the last shell that worked. The previous build's assets are dropped only
   after the swap succeeds. Bump `CACHE` when the caching behaviour changes;
   content staleness is already handled by the hashed names.
+- **The `Space` shortcut ignores auto-repeat.** Without that guard a held key
+  fires `keydown` continuously: one press measured **21 draws** on production,
+  inflating a lifetime tally that persists and flushing recents in a second.
+  Anything else bound to a key needs the same `event.repeat` check.
 - **Two `localStorage` keys**: `draftOracle_v1` (settings/history) and
   `draftOracle_v1_roster` (the offline roster cache). Reading either can throw in
   private mode — every access is already wrapped.

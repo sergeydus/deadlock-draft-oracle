@@ -17,6 +17,9 @@ export function App() {
 
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.code !== 'Space' || event.ctrlKey || event.metaKey || event.altKey) return;
+      // A held key auto-repeats. Without this, one press drew twenty-one times
+      // and inflated a lifetime tally that persists — measured on production.
+      if (event.repeat) return;
       // Space activates whatever control has focus; only hijack it when nothing
       // interactive does.
       const active = document.activeElement as HTMLElement | null;
