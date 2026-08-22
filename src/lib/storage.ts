@@ -21,11 +21,6 @@ export interface PersistedState {
 }
 
 /**
- * Runtime shape guard. The metadata fields are checked too, so a cache written
- * before they existed is rejected and refetched rather than silently disabling
- * the filters.
- */
-/**
  * Guard for a persisted recents entry.
  *
  * Deliberately narrower than `isHeroRecord`: a list written by any older
@@ -39,6 +34,11 @@ export function isRecentPick(pick: unknown): pick is RecentPick {
     && typeof value.name === 'string' && value.name.trim().length > 0;
 }
 
+/**
+ * Runtime shape guard for a cached hero. The metadata fields are checked too,
+ * so a cache written before they existed is rejected and refetched rather than
+ * silently disabling the filters.
+ */
 export function isHeroRecord(hero: unknown): hero is Hero {
   if (hero === null || typeof hero !== 'object') return false;
   const value = hero as Record<string, unknown>;

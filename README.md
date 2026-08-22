@@ -69,6 +69,10 @@ talk to the roster APIs from the browser. To enable it on a fork, set
 See [AGENTS.md](AGENTS.md) for the architecture, the invariants to preserve, and
 the manual smoke-test checklist.
 
+## License
+
+MIT — see [LICENSE](LICENSE).
+
 ## Data sources
 
 Roster data comes from community-run APIs. This project is unofficial and not

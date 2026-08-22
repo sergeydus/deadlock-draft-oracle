@@ -29,10 +29,11 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
       - run: npm ci
-      - run: npm run typecheck
       # Deterministic half only, so this job gates merges without depending on
       # anyone else's uptime.
       - run: npm run test:offline
+      # Typechecks before it bundles, which is why there is no separate
+      # typecheck step: it would run tsc twice for one signal.
       - run: npm run build
 
   feeds:

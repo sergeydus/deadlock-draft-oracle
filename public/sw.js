@@ -33,6 +33,11 @@ const SHELL = new URL('./', self.location).href;
  * Vite emits the bundle under a content hash, so its name cannot be written
  * down here. Rather than generate a manifest at build time, read it out of the
  * shell — always in step with the build, with no plugin to keep in sync.
+ *
+ * This does assume Vite keeps emitting double-quoted `src`/`href` attributes,
+ * which it does today. The offline-shell checks in scripts/verify.mjs run this
+ * against a realistic shell, so a change in that would surface as a precache
+ * that suddenly holds nothing but the document.
  */
 const shellAssets = (html) => [...new Set(
   [...html.matchAll(/(?:src|href)="([^"]+)"/g)]

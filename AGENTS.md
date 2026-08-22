@@ -35,7 +35,7 @@ that mentions no version at all.
 |---|---|
 | `src/main.tsx`, `src/App.tsx` | Entry point; global key/hash listeners and the initial load. |
 | `src/store/OracleStore.ts` | **All application state.** One MobX class; a singleton `store` is imported directly by components. |
-| `src/lib/` | Pure logic, no DOM and no store: `feed` (parsing), `random` (seeded draws), `pool` (filters), `roster` (fetch + merge), `storage`, `share`, `css`. |
+| `src/lib/` | Logic with no store import and no mutable application state. A pure core — `feed` (parsing), `pool` (filters), `random` (seeded draws), `css`, and `roster`’s parse/merge half — and a browser edge: `share` (URL + clipboard), `storage` (localStorage), `roster`’s fetching. |
 | `src/components/` | Presentation only. Every component is an `observer`. |
 | `src/styles.css` | **Plain global stylesheet, not CSS Modules.** See below. |
 | `public/` | Favicon, touch icon, the `og.png` share card and `sw.js`. Copied into `dist/` verbatim. |
@@ -53,9 +53,16 @@ that mentions no version at all.
    is no repaint step, because observers re-render themselves. That is the point
    of the MobX layer: the old hand-written `render()` plus twelve sync functions
    kept producing bugs where one surface stopped being refreshed.
-2. **`src/lib/` stays pure.** No DOM, no store import, no module-level mutable
-   state. `drawFrom`/`drawSquad` take the RNG as a parameter and `eligibleHeroes`
-   takes a criteria object, which is why the tests need no mocks or stubs.
+2. **`src/lib/` never imports the store and never owns mutable application
+   state.** That part is absolute. Purity is not: `feed`, `pool`, `random`,
+   `css` and `roster`'s parsing and merging are pure functions, and the tests
+   exercise them with no setup at all — `drawFrom`/`drawSquad` take the RNG as a
+   parameter, `eligibleHeroes` takes a criteria object. But `share` reads
+   `location`/`history` and writes the clipboard, `storage` reads
+   `localStorage`, and `roster` fetches. Those are the browser edge, and
+   `scripts/browser-shims.mjs` exists for them. Put new logic in the core if it
+   can go there; if it cannot, it belongs beside `share` and `storage`, not
+   smuggled into a module that is currently pure.
 3. **Feed parsing is defensive.** The two sources return different shapes and both
    change without notice, so `unwrap`/`normalise`/`imageFrom` tolerate missing or
    renamed fields and return `null`/`''` rather than throwing. Do not "simplify"
@@ -252,25 +259,29 @@ npm run typecheck     # tsc --noEmit, strict
 ```
 
 `scripts/verify.mjs` imports `src/**` directly and runs under plain `node` via
-native TypeScript stripping — no test runner, no build. That requires **Node 23.6+**,
-or 22.6+ with `--experimental-strip-types`, which `scripts/test.mjs` supplies for
-you (CI pins 24). It is why `src/lib` imports use explicit `.ts` extensions: Node's ESM
-resolver requires them.
+native TypeScript stripping — no test runner, no build. The floor is **Node 22.6**,
+which `package.json` declares; `scripts/test.mjs` adds `--experimental-strip-types`
+below 23.6, where stripping is still behind a flag (CI pins 24). It is why
+`src/lib` imports use explicit `.ts` extensions: Node's ESM resolver requires them.
 
 CI (`.github/workflows/ci.yml`) splits deliberately:
 
-- **`verify`** runs typecheck + `test:offline` + `build`. Deterministic, gates merges.
+- **`verify`** runs `test:offline` + `build`. Deterministic, gates merges. There
+  is no separate typecheck step because `build` is `tsc --noEmit && vite build` —
+  `npm run typecheck` is for the quicker local loop.
 - **`feeds`** runs the live half. `continue-on-error` on pull requests — a
   third-party outage is not a contributor's problem — and on the **daily schedule**
   it retries once and then opens or comments on a `feed-canary` issue. That nightly
   run is the point: it is how you learn a roster API moved before your users do.
 
-`scripts/browser-shims.mjs` supplies the browser globals the store needs — it is
-not pure, and leaving it untested is how the share-hash bug survived a suite that
-covered every piece it is built from. Import those shims *before* the store.
+`scripts/browser-shims.mjs` supplies the browser globals — for the store, and for
+the `lib` modules at the browser edge that it leans on. Leaving that layer
+untested is how the share-hash bug survived a suite that covered every pure piece
+it was built from. Import the shims *before* the store.
 
 None of that renders a page, so this manual list still matters (console must stay
-clean) — though steps 1, 7 and 8 now have automated cover:
+clean) — though steps 1 and 7 through 9 now have automated cover. Step 10 has
+none, which is the point of it:
 
 1. Roster loads, status pill goes green, a hero is drawn automatically.
 2. `Space` and **PICK MY HERO** both draw; the art crossfades with no empty flash
@@ -285,9 +296,17 @@ clean) — though steps 1, 7 and 8 now have automated cover:
 7. **Copy draw link** → open the URL in a new tab → the same draw appears labelled
    `SHARED DRAW`, and it does not add to the draw log.
 8. Reload → exclusions, recents, draw log, squad size and filters all survive.
-9. Offline (devtools → Network → Offline) → refresh → the cached roster appears
-   immediately, not after the feeds time out, and the status pill settles on
-   `Cached roster · …` once they do.
+9. Offline (devtools → Network → Offline) → refresh. Two separate things have to
+   work: the **shell** loads at all, which is the service worker's cache, and a
+   hero is drawn from the **roster** cache in `localStorage` — appearing
+   immediately rather than after the feeds time out, with the status pill
+   settling on `Cached roster · …` once they do. Before the worker existed only
+   the second half was ours; the first was whatever the browser had kept.
+10. After a deploy: load the live site, wait, then reload twice. The second
+    reload should be running the new build. `sw.js` is usually byte-identical
+    between builds, so the worker is not reinstalled — it picks the new build up
+    through a navigation, which is the path worth eyeballing by hand until the
+    browser E2E is committed.
 
 ## Shipping it
 

@@ -9,5 +9,7 @@ Three things that are easy to get wrong and worth repeating here:
   that read it and call its methods. There is no repaint step.
 - **`src/styles.css` is a plain global stylesheet, not CSS Modules.** Class names
   in components are a contract with it — renaming one silently unstyles an element.
-- **`src/lib/` is pure.** No DOM, no store import, no module-level mutable state;
-  that is what keeps the tests free of mocks.
+- **`src/lib/` imports no store and holds no mutable app state.** Its core —
+  `feed`, `pool`, `random`, `css` — is pure and tests with no setup. Its edge —
+  `share`, `storage`, `roster`'s fetching — talks to the browser, which is what
+  `scripts/browser-shims.mjs` is for. Do not assume a `lib` module is pure.
