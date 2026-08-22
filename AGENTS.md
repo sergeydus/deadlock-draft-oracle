@@ -171,10 +171,15 @@ best-effort: if it fails you lose a filter and a colour, never the roster.
   visitor has a usable roster on the same tick. It used to be the last resort,
   read only once every source had exhausted `FETCH_TIMEOUT_MS` — measured at 16s
   of "Loading" with a complete roster already in `localStorage`. Two
-  consequences: the live feed arriving means `adoptRoster()` runs a *second*
-  time, which is safe only because it keeps the pick already on screen; and
-  priming is skipped when a roster is already displayed, so a manual refresh
-  never replaces live data with an older copy of itself.
+  consequences. The live feed arriving means `adoptRoster()` runs a *second*
+  time, so it takes an `authoritative` flag: a **provisional** roster does
+  nothing irreversible. It does not prune saved ids — the cache can predate a
+  hero, and pruning against it deletes that hero’s exclusion for good — and it
+  does not bank its opening draw, which may name someone the live roster no
+  longer has. Both happen when a feed confirms the roster, or when every feed
+  has failed and the cache becomes all there is. Priming is also skipped when a
+  roster is already displayed, so a manual refresh never replaces live data
+  with an older copy of itself.
 - **The social-card URLs are the one exception to the relative-URL rule.** A
   crawler reading `og:image` has no document to resolve it against, so that tag
   and `og:url` are absolute and hardcoded to the deployed `homepage`. `npm test`

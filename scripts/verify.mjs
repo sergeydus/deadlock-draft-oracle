@@ -402,6 +402,114 @@ check('the same names as before the roster went away',
 
 restoreFetch();
 
+/* ── Provisional rosters ──
+   Priming calls adoptRoster with a roster the network has not confirmed, and
+   adoptRoster does irreversible things: it prunes saved ids and banks the
+   opening draw. Against a cache that predates the live roster, both are wrong
+   — a hero the cache has not heard of loses its exclusion, and a pick that
+   does not survive the handover is left in the tally.
+
+   These use DISJOINT cached and live rosters, so the provisional pick is
+   guaranteed absent upstream and the handover always has to do something. */
+section('provisional rosters');
+
+const CACHED_IDS = ['abrams', 'bebop', 'dynamo', 'haze', 'infernus', 'lash'];
+const LIVE_IDS = ['mcginnis', 'seven', 'talon', 'vindicta', 'warden', 'wraith'];
+const feedFor = (list) => list.map((id) => ({
+  name: id, class_name: `hero_${id}`, complexity: 2, hero_type: 'mystic',
+  images: { icon_hero_card: `https://assets.test/${id}.png` }, description: 'a blurb',
+}));
+const cachedFeed = feedFor(CACHED_IDS);
+const liveFeed = feedFor(LIVE_IDS);
+
+/** Leave a CACHED_IDS roster in the cache, with settings under the test's control. */
+const seedRosterCache = async () => {
+  resetBrowser();
+  stubFetch(cachedFeed);
+  const warm = new OracleStore();
+  await warm.load();
+  storage.delete('draftOracle_v1');
+};
+
+await seedRosterCache();
+resetBrowser({ keepStorage: true });
+stubFetch(liveFeed);
+const handover = new OracleStore();
+await handover.load();
+check('one draw is recorded even when the primed pick is not in the live roster',
+  handover.pickCount === 1, `pickCount=${handover.pickCount}`);
+check('the tally holds only the hero actually drawn', Object.keys(handover.tally).length === 1, JSON.stringify(handover.tally));
+check('and the drawn hero is a live one', LIVE_IDS.includes(handover.squad[0].id), squadIds(handover));
+
+// Saved state must not be reconciled against a roster that merely predates it.
+await seedRosterCache();
+resetBrowser({ keepStorage: true });
+storage.set('draftOracle_v1', JSON.stringify({ excluded: ['wraith', 'abrams'], recent: [], tally: {}, pickCount: 0 }));
+stubFetch(liveFeed);
+const reconciled = new OracleStore();
+await reconciled.load();
+check('an exclusion the cache has never heard of survives priming', reconciled.excluded.has('wraith'),
+  `excluded=[${[...reconciled.excluded].join(',')}]`);
+check('it survives in localStorage too',
+  JSON.parse(storage.get('draftOracle_v1')).excluded.includes('wraith'));
+check('an exclusion the LIVE roster dropped is still pruned', !reconciled.excluded.has('abrams'),
+  `excluded=[${[...reconciled.excluded].join(',')}]`);
+
+// A share link naming a hero the stale cache lacks must not be trampled by the
+// provisional opening draw writing its own hash over it.
+await seedRosterCache();
+resetBrowser({ hash: '#squad=wraith', state: null, keepStorage: true });
+storage.delete('draftOracle_v1');
+stubFetch(liveFeed);
+const lateGuest = await quietly(async () => { const store = new OracleStore(); await store.load(); return store; });
+check('a share link the cache cannot resolve survives until the live roster can',
+  squadIds(lateGuest) === 'wraith', squadIds(lateGuest));
+check('and is still labelled SHARED DRAW', lateGuest.shared, lateGuest.stageLabel);
+check('the sender hash was never overwritten', location.hash === '#squad=wraith', location.hash);
+
+// With no feed at all the cache becomes authoritative, and everything priming
+// deferred has to happen then.
+await seedRosterCache();
+resetBrowser({ keepStorage: true });
+storage.set('draftOracle_v1', JSON.stringify({ excluded: ['nobody'], recent: [], tally: {}, pickCount: 0 }));
+stubFetch('fail');
+const promoted = await quietly(async () => { const store = new OracleStore(); await store.load(); return store; });
+check('a dead network promotes the cache and banks its draw', promoted.pickCount === 1, `pickCount=${promoted.pickCount}`);
+check('and reconciles saved state against it', !promoted.excluded.has('nobody'), [...promoted.excluded].join(','));
+check('the draw is in the address bar once it is real', location.hash.startsWith('#squad='), location.hash);
+
+// Back/forward onto an entry this tab wrote.
+resetBrowser();
+stubFetch(liveFeed);
+const navigating = new OracleStore();
+await navigating.load();
+const ownHash = location.hash;
+const ownState = history.state;
+const ownSquad = squadIds(navigating);
+location.hash = '#squad=talon';
+history.state = null;
+navigating.applySharedFromHash();
+check('navigating to a pasted link shows it', squadIds(navigating) === 'talon', squadIds(navigating));
+location.hash = ownHash;
+history.state = ownState;
+navigating.applySharedFromHash();
+check('going back to our own entry re-shows that draw', squadIds(navigating) === ownSquad,
+  `${squadIds(navigating)} vs ${ownSquad}`);
+check('and does not relabel it as shared', !navigating.shared, navigating.stageLabel);
+
+// An emptied stage belongs to nobody.
+resetBrowser({ hash: '#squad=talon', state: null });
+stubFetch(liveFeed);
+const emptiedShare = new OracleStore();
+await emptiedShare.load();
+check('the pasted draw starts out shared', emptiedShare.shared, emptiedShare.stageLabel);
+for (const id of LIVE_IDS) emptiedShare.toggleExcluded(id);
+emptiedShare.roll();
+check('emptying the pool drops the SHARED DRAW label',
+  !emptiedShare.shared && !emptiedShare.stageLabel.includes('SHARED'), emptiedShare.stageLabel);
+
+restoreFetch();
+
 /* ── A received link stays received ──
    The marker means "this tab produced the draw this hash describes", not "the
    app has seen this hash". Restoring a shared draw therefore leaves the address
