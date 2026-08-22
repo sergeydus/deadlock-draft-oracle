@@ -266,7 +266,9 @@ below 23.6, where stripping is still behind a flag (CI pins 24). It is why
 
 CI (`.github/workflows/ci.yml`) splits deliberately:
 
-- **`verify`** runs typecheck + `test:offline` + `build`. Deterministic, gates merges.
+- **`verify`** runs `test:offline` + `build`. Deterministic, gates merges. There
+  is no separate typecheck step because `build` is `tsc --noEmit && vite build` —
+  `npm run typecheck` is for the quicker local loop.
 - **`feeds`** runs the live half. `continue-on-error` on pull requests — a
   third-party outage is not a contributor's problem — and on the **daily schedule**
   it retries once and then opens or comments on a `feed-canary` issue. That nightly
