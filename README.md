@@ -24,14 +24,17 @@ or a whole six-stack.
   romanizations, so `火男` and `infa-nasu` both find Infernus.
 - **Per-hero colour** — the stage takes on the drawn hero's own accent colour.
 - **Draw log** — a lifetime tally of what the oracle actually favours.
+- **Works offline** — a service worker keeps the app shell on disk, and the
+  roster is cached, so a reload with no connection still draws you a hero.
 - Everything persists in `localStorage`. <kbd>Space</kbd> rerolls.
 
 ## Run it
 
 ```bash
 npm install
-npm run dev        # http://localhost:5173
-npm run build      # typecheck + production bundle into dist/
+npm run dev             # http://localhost:5173
+npm run build           # typecheck + production bundle into dist/
+npm run preview:subpath # serve the build at /deadlock-draft-oracle/, as Pages does
 ```
 
 React + TypeScript + MobX, built with Vite.
@@ -43,7 +46,12 @@ npm run typecheck     # tsc --noEmit, strict
 ```
 
 The test harness imports the source directly and runs under plain `node` via
-native TypeScript stripping — no test runner. It needs Node 23.6 or newer.
+native TypeScript stripping — no test runner. It needs Node 22.6+, and runs
+without a flag from 23.6; `npm test` supplies the flag when it has to.
+
+`preview:subpath` is worth the extra step before anything touching a URL: the
+app is served from a subdirectory in production, so a root-relative link works
+perfectly on `localhost:5173` and breaks only once deployed.
 
 CI runs the deterministic checks and a production build on every pull request, and
 the live-feed checks nightly — the roster APIs are community-run, so that

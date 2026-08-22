@@ -38,9 +38,11 @@ that mentions no version at all.
 | `src/lib/` | Pure logic, no DOM and no store: `feed` (parsing), `random` (seeded draws), `pool` (filters), `roster` (fetch + merge), `storage`, `share`, `css`. |
 | `src/components/` | Presentation only. Every component is an `observer`. |
 | `src/styles.css` | **Plain global stylesheet, not CSS Modules.** See below. |
-| `public/` | Favicon, touch icon and the `og.png` share card. Copied into `dist/` verbatim. |
+| `public/` | Favicon, touch icon, the `og.png` share card and `sw.js`. Copied into `dist/` verbatim. |
+| `public/sw.js` | The offline shell. Plain JS on purpose — `public/` is not compiled. |
 | `scripts/test.mjs` | `npm test` entry point; picks the Node flags, then runs the harness. |
 | `scripts/verify.mjs` | The checks themselves — see *Verifying a change*. |
+| `scripts/sw-harness.mjs` | A `ServiceWorkerGlobalScope` small enough to run `public/sw.js` under node. |
 
 ## The five rules
 
@@ -159,6 +161,13 @@ best-effort: if it fails you lose a filter and a colour, never the roster.
   either: `vite preview` redirects the origin root back to the app (302) where
   Pages returns 404, so a root-relative link looks like it works. The static
   check is what actually guards it.
+  Attributes are only half of it: a URL passed to `serviceWorker.register`,
+  `fetch` or `new URL` is just as absolute and just as invisible. `npm test`
+  scans those call sites too, across `src/` **and** `public/`. It is
+  deliberately a list of call sites rather than "any string starting with
+  `/`" — the broad version flags route patterns, regexes and CSS paths, and a
+  guard that cries wolf gets deleted. Add your call site to the list when you
+  introduce one.
 - **The stage owns the app's draw announcement.** The `<h1>` is keyed on the draw,
   so it is replaced rather than updated and no assistive tech reads it. One
   `role="status"` node in `HeroStage` says what was drawn, and it includes the
@@ -188,6 +197,48 @@ best-effort: if it fails you lose a filter and a colour, never the roster.
   1200x630 the tags claim. Everything else — including the two icon `<link>`s —
   stays relative.
 - **Recents persist as `{id, name}`, not whole heroes.** Only those two fields are ever read — the id keeps a hero out of the next draw, the name labels the chip — and storing full records meant every field added to `Hero` made `isHeroRecord` reject the saved list. The name is kept rather than resolved from the roster on purpose: with no roster and no cache, it is the only thing the chips have left to show. A list written by the old schema still loads, since a full `Hero` satisfies `isRecentPick`.
+- **The service worker caches the shell and nothing else.** It only ever runs
+  in production — never under `npm run dev` or `npm run preview` — which is the
+  same blind spot that shipped an `href="/"` to a 404, so
+  `scripts/sw-harness.mjs` runs the real `public/sw.js` under node and
+  `npm test` drives it through install, activate and fetch.
+  **Registration is `'./sw.js'`**, resolved against the document, which is the
+  deployed directory; `'/sw.js'` fails its scope check outright, and
+  `import.meta.url` would resolve against the hashed bundle in `assets/` and
+  scope the worker to a directory no navigation ever reaches.
+  **Cross-origin requests are passed straight through**, which is what keeps the
+  worker out of the store's way: the roster has exactly one cache, in
+  `localStorage`, with one set of rules about how far to trust it, and hero
+  portraits are not worth carrying without a roster. **Navigations are
+  network-first**, because Pages already serves this HTML with `max-age=600`;
+  answering them from the worker's cache as well would put a deploy an unbounded
+  distance from its audience. The cache is the offline fallback only.
+- **Scope does not extend to storage.** A worker's scope decides which URLs it
+  answers for. `CacheStorage` is origin-wide, and `sergeydus.github.io` is one
+  origin for *every* Pages project under the account. So caches are named with
+  the `draft-oracle-shell-` prefix and activation deletes only those — treating
+  "not the current cache" as "stale" would delete a neighbouring project's data.
+  For the same reason nothing reads through `caches.match()`, which searches
+  every cache on the origin and can hand back a neighbour's copy of a URL we
+  also own; open the named cache and match against that.
+- **A cache write has to be registered with `event.waitUntil()`.** Once the
+  promise passed to `respondWith()` settles, the browser is free to terminate
+  the worker, and a detached `cache.put()` is simply lost — intermittently, and
+  only in production. A fake cache that resolves instantly cannot show this, so
+  `sw-harness.mjs` models it directly: `defer()` holds writes open and
+  `background` records what the worker asked the browser to wait for.
+- **A deploy updates the shell assets-first, document-last.** `sw.js` is usually
+  byte-identical between builds, so a deployment does not reinstall the worker —
+  the running one meets the new build through an online navigation instead. If
+  it cached the new HTML and picked up the new hashes as they happened to be
+  requested, then anything ending that window early (the tab closing, the worker
+  being terminated, one asset failing) would leave a cached document naming
+  assets nobody has, and the offline app would stop booting. `adoptShell()`
+  therefore fetches everything the new document references, and only then
+  replaces the document; `addAll` is all-or-nothing, so a half-broken deploy
+  keeps the last shell that worked. The previous build's assets are dropped only
+  after the swap succeeds. Bump `CACHE` when the caching behaviour changes;
+  content staleness is already handled by the hashed names.
 - **Two `localStorage` keys**: `draftOracle_v1` (settings/history) and
   `draftOracle_v1_roster` (the offline roster cache). Reading either can throw in
   private mode — every access is already wrapped.
