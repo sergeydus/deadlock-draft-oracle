@@ -36,6 +36,7 @@ that mentions no version at all.
 | `src/main.tsx`, `src/App.tsx` | Entry point; global key/hash listeners and the initial load. |
 | `src/store/OracleStore.ts` | **All application state.** One MobX class; a singleton `store` is imported directly by components. |
 | `src/lib/` | Logic with no store import and no mutable application state. A pure core — `feed` (parsing), `pool` (filters), `random` (seeded draws), `css`, and `roster`’s parse/merge half — and a browser edge: `share` (URL + clipboard), `storage` (localStorage), `roster`’s fetching. |
+| `src/lib/eggs.ts` | **Every easter egg**, as pure rules and copy. See *Easter eggs* below — spoilers. |
 | `src/components/` | Presentation only. Every component is an `observer`. |
 | `src/styles.css` | **Plain global stylesheet, not CSS Modules.** See below. |
 | `public/` | Favicon, touch icon, the `og.png` share card and `sw.js`. Copied into `dist/` verbatim. |
@@ -246,9 +247,83 @@ best-effort: if it fails you lose a filter and a colour, never the roster.
   keeps the last shell that worked. The previous build's assets are dropped only
   after the swap succeeds. Bump `CACHE` when the caching behaviour changes;
   content staleness is already handled by the hashed names.
+- **The `Space` shortcut ignores auto-repeat.** Without that guard a held key
+  fires `keydown` continuously: one press measured **21 draws** on production,
+  inflating a lifetime tally that persists and flushing recents in a second.
+  Anything else bound to a key needs the same `event.repeat` check.
 - **Two `localStorage` keys**: `draftOracle_v1` (settings/history) and
   `draftOracle_v1_roster` (the offline roster cache). Reading either can throw in
   private mode — every access is already wrapped.
+
+## Easter eggs
+
+**Spoilers.** They are listed because an undocumented egg is indistinguishable
+from a bug, and the next person to read `OracleStore` will otherwise "clean up"
+a counter that looks dead.
+
+All seven live in `src/lib/eggs.ts` — pure rules and copy, no DOM — with the
+store holding the counters and the components rendering the result. **None of
+them touches a draw.** No egg changes the pool, the RNG, or the odds; a user who
+never finds one loses nothing, and `npm test` asserts that finding one leaves
+the eligible pool identical.
+
+| Egg | How it is found | Where |
+|---|---|---|
+| **Arcane mode** | The Konami code, typed outside a text field. Toggles. | `arcane` on the store, persisted; `.hero-stage.arcane` in the stylesheet |
+| **Secret searches** | Twelve words typed into the hero search. | `SECRETS`; `secretSignal` getter → `RosterPanel` |
+| **The insistent oracle** | The same hero drawn three times running. | `noteStreak()` |
+| **Milestones** | Crossing 50 / 100 / 250 / 500 / 1000 lifetime draws. | `milestoneCrossed()` in `recordDraw()` |
+| **Prophecy** | Seven quick taps on the stage eyebrow, or typing `oracle`. | `tapEyebrow()`, `INVOCATION` |
+| **Impatience** | Five rolls inside three seconds. | `noteRollPace()` |
+| **Nobody left** | Excluding every hero in the roster. | `everyoneExcluded` getter → `HeroStage` |
+
+Five of these have a trap that is easy to reintroduce:
+
+- **Milestones must test crossing, not equality.** A squad draw adds up to six
+  at once, so counts step `43 → 49 → 55` and hit 50 exactly never.
+- **The streak cannot be read off `recent`**, which de-duplicates on write. It
+  needs its own counter, and it deliberately ignores slot rerolls — those draw
+  from a pool with the current hero removed, so they can never repeat one.
+- **A secret search term must match no hero.** The search box matches names *and*
+  aliases, and aliases carry seventeen languages plus romanizations and
+  nicknames. A collision silently un-hides the egg: the user gets a hero card and
+  never sees the answer. The live-feed half of `npm test` checks all twelve
+  against both feeds — as it does that no prophecy names a hero, since the roster
+  changes with the game.
+- **"Everyone excluded" is not "the pool is empty."** A complexity or role filter
+  empties the pool too, and telling that user to un-exclude heroes they never
+  excluded is worse than saying nothing.
+- **The eggs share one toast between them.** `noteStreak()` runs after
+  `recordDraw()`, so when a draw both completes a three-run *and* crosses a
+  milestone, the streak line is the one left standing. `npm test` pins that, so
+  reordering it is a visible decision rather than a silent change.
+- **Every egg is reachable without a mouse.** The eyebrow tap cannot be — it is a
+  decorative `div`, and making it a button would put a tab stop in front of the
+  app's primary control and announce "button, THE ORACLE CHOOSES" without
+  explaining what it does. So the prophecy has a second trigger instead, the
+  `INVOCATION` key sequence, and the two routes are the same egg. Neither is
+  discoverable — that is the point — but both are operable, which is the actual
+  requirement. Any new egg bound to a pointer needs the same treatment.
+  The eyebrow also carries `user-select: none`, because seven quick clicks on
+  text otherwise selects it and looks broken.
+- **An egg that only shows text has to reach the live region too.** A secret
+  search paints the oracle's reply into the roster grid, and `rosterAnnouncement`
+  returns that reply instead of "0 heroes match" — otherwise the egg exists only
+  for people who can see it.
+- **Only a roll that can draw counts toward impatience.** `Space` stays live on an
+  empty stage, so the pace check is gated on a non-empty pool; without that,
+  five presses that drew nothing still earned a scolding.
+
+Two things make egg tests flaky if you forget them, and both cost a run to find:
+
+- **`load()` draws before your test does anything.** A test that narrows the pool
+  to one hero and counts a streak starts at two, not one, whenever that opening
+  draw happened to pick the same hero — one run in eight. Pin the pool to a hero
+  the opening draw did *not* produce.
+- **Leave `avoidRecent` on unless the test is about turning it off.** With it off,
+  a three-run can happen inside any warm-up loop, and its toast overwrites
+  whichever line the test was actually checking. With it on and a healthy roster
+  the pool cannot repeat a hero, so nothing else can fire.
 
 ## Verifying a change
 

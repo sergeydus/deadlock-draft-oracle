@@ -2,6 +2,7 @@ import { useEffect, useState, type CSSProperties } from 'react';
 import { observer } from 'mobx-react-lite';
 import { store } from '../store/OracleStore.ts';
 import { NO_DESCRIPTION } from '../constants.ts';
+import { NOBODY_LEFT_BODY, NOBODY_LEFT_TITLE } from '../lib/eggs.ts';
 import { classes, cssUrl, titleCase } from '../lib/css.ts';
 import { SquadStrip } from './SquadStrip.tsx';
 
@@ -63,11 +64,15 @@ function stageCopy(): { title: string; description: string; number: string } {
         number: 'OFFLINE',
       };
     case 'empty':
-      return {
-        title: 'No hero left',
-        description: 'Re-enable a hero or clear your exclusions to restore the pool.',
-        number: store.stageLabel,
-      };
+      // Excluding the entire roster is a different act from filtering the pool
+      // down to nothing, and gets its own answer — see lib/eggs.
+      return store.everyoneExcluded
+        ? { title: NOBODY_LEFT_TITLE, description: NOBODY_LEFT_BODY, number: store.stageLabel }
+        : {
+          title: 'No hero left',
+          description: 'Re-enable a hero or clear your exclusions to restore the pool.',
+          number: store.stageLabel,
+        };
     default: {
       const hero = store.featuredHero;
       return {
@@ -89,14 +94,22 @@ export const HeroStage = observer(function HeroStage() {
 
   return (
     <section
-      className="hero-stage"
+      className={classes('hero-stage', store.arcane && 'arcane')}
       aria-labelledby="pickedLabel"
       style={accentStyle}
     >
       <div className="ambient ambient-one" />
       <div className="ambient ambient-two" />
       <div className="scanlines" />
-      <div className="eyebrow" id="pickedLabel">THE ORACLE CHOOSES</div>
+      {/* Tapping this seven times asks the oracle for a prophecy — see lib/eggs.
+          It stays a plain div because a button here would add a tab stop in
+          front of the app's primary control and announce "button, THE ORACLE
+          CHOOSES" without saying what it does. Keyboard users reach the same
+          prophecy through the INVOCATION sequence instead, so this is one of
+          two routes to one egg rather than a mouse-only feature. */}
+      <div className="eyebrow" id="pickedLabel" onClick={store.tapEyebrow}>
+        {store.arcane ? 'THE ORACLE HAS AWOKEN' : 'THE ORACLE CHOOSES'}
+      </div>
       <StageArt url={drawn ? hero.image : ''} />
       <p className="hero-number">{copy.number}</p>
       {/* Keyed on the draw so the reveal animation restarts even when the same
