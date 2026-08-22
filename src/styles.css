@@ -910,6 +910,47 @@ kbd {
   outline-offset: -2px;
 }
 
+/* ── Easter eggs ──
+   Cosmetic only — nothing here changes a draw. src/lib/eggs.ts documents what
+   unlocks each one. */
+
+/* Arcane mode (the Konami code): the stage leans into its own atmosphere.
+   Same layout, same contrast for the text — only the ambience moves. */
+.hero-stage.arcane .ambient {
+  opacity: .85;
+  filter: blur(46px);
+}
+
+.hero-stage.arcane .ambient-one { animation: arcane-drift 9s ease-in-out infinite; }
+.hero-stage.arcane .ambient-two { animation: arcane-drift 11s ease-in-out infinite reverse; }
+
+.hero-stage.arcane .scanlines { opacity: .2; }
+
+.hero-stage.arcane .eyebrow {
+  color: #f4ffd0;
+  text-shadow: 0 0 14px var(--acid);
+}
+
+@keyframes arcane-drift {
+  0%, 100% { transform: translate3d(0, 0, 0) scale(1); }
+  50% { transform: translate3d(0, -14px, 0) scale(1.08); }
+}
+
+/* The prophecy tap target. Seven quick clicks on text would otherwise select
+   it, which looks like a bug rather than a secret. */
+.hero-stage .eyebrow {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* An answered search should read as the oracle speaking, not as an error. */
+.secret-signal {
+  color: var(--acid);
+  font-style: italic;
+  max-width: 36ch;
+  margin-inline: auto;
+}
+
 /* ── Reduced motion ── */
 
 @media (prefers-reduced-motion: reduce) {

@@ -3,6 +3,11 @@ import { COMPLEXITY_LEVELS, RECENT_LIMIT, ROLE_ORDER, SOURCES, TALLY_ROWS } from
 import { drawFrom, drawSquad, mulberry32, randomSeed, type Rng } from '../lib/random.ts';
 import { eligibleHeroes, poolFor, type PoolCriteria } from '../lib/pool.ts';
 import { fetchEnrichment, fetchRoster, mergeInto } from '../lib/roster.ts';
+import {
+  ARCANE_OFF, ARCANE_ON, EYEBROW_TAPS, IMPATIENT_LINE, IMPATIENT_WINDOW_MS, INSISTENT_AT, INVOCATION,
+  KONAMI, TAP_WINDOW_MS, advanceSequence, insistentLine, isImpatient, milestoneCrossed, milestoneLine,
+  prophecy, secretFor,
+} from '../lib/eggs.ts';
 import { clearHash, copyToClipboard, hasUnresolvedShare, isOwnHash, readSharedDraw, writeHash } from '../lib/share.ts';
 import { loadCachedRoster, loadState, saveCachedRoster, saveState } from '../lib/storage.ts';
 import type { Hero, RecentPick, StatusKind } from '../types.ts';
@@ -66,6 +71,11 @@ export class OracleStore {
   drawId = 0;
   toastMessage = '';
   toastVisible = false;
+  /** Arcane mode — see lib/eggs. Cosmetic only; the draw is untouched. */
+  arcane = false;
+  /** The hero drawn solo most recently, and how many times running. */
+  streakId = '';
+  streakCount = 0;
 
   /**
    * True while the roster on screen came from the cache and no feed has
@@ -74,13 +84,25 @@ export class OracleStore {
    * data, and a draw from it may name a hero that no longer exists.
    */
   private provisional = false;
+  /* Egg bookkeeping. None of it is observable: nothing renders from these, and
+     a keystroke that only moves a counter must not re-render the app. */
+  private konami = 0;
+  private invocation = 0;
+  private taps = 0;
+  private lastTap = 0;
+  private rollTimes: number[] = [];
+  private scolded = false;
   private rng: Rng = mulberry32(1);
   private toastTimer: ReturnType<typeof setTimeout> | undefined;
 
   constructor() {
     // The type argument lets the overrides name private fields; both are plain
     // mutable state that nothing should react to.
-    makeAutoObservable<OracleStore, 'rng' | 'toastTimer' | 'provisional'>(this, { rng: false, toastTimer: false, provisional: false }, { autoBind: true });
+    makeAutoObservable<OracleStore, 'rng' | 'toastTimer' | 'provisional' | 'konami' | 'invocation' | 'taps' | 'lastTap' | 'rollTimes' | 'scolded'>(
+      this,
+      { rng: false, toastTimer: false, provisional: false, konami: false, invocation: false, taps: false, lastTap: false, rollTimes: false, scolded: false },
+      { autoBind: true },
+    );
     this.restore();
   }
 
@@ -158,7 +180,11 @@ export class OracleStore {
     switch (this.mode) {
       case 'loading': return '';
       case 'offline': return 'Live roster unavailable. Check your connection, then refresh the roster.';
-      case 'empty': return 'No hero is eligible. Re-enable a hero or clear your exclusions.';
+      // Matches what the stage shows: telling someone to clear exclusions they
+      // did not make is the same wrong advice whether it is read or seen.
+      case 'empty': return this.everyoneExcluded
+        ? 'Every hero is excluded. Re-enable at least one to draw again.'
+        : 'No hero is eligible. Re-enable a hero or clear your exclusions.';
       default: {
         if (!this.squad.length) return '';
         const names = this.squad.map((hero) => hero.name).join(', ');
@@ -174,8 +200,28 @@ export class OracleStore {
   get rosterAnnouncement(): string {
     if (!this.heroes.length) return '';
     if (!this.search.trim()) return `${this.heroes.length} heroes.`;
+    // The oracle's reply is the whole point of that search; announcing
+    // "0 heroes match" instead would hide the egg from anyone listening.
+    const secret = this.secretSignal;
+    if (secret) return secret;
     const matches = this.visibleRoster.length;
     return matches === 1 ? '1 hero matches.' : `${matches} heroes match.`;
+  }
+
+  /**
+   * The oracle's reply to a search that matched nothing — see lib/eggs.
+   * Null for an ordinary miss, which keeps its ordinary "no match" copy.
+   */
+  get secretSignal(): string | null {
+    return this.visibleRoster.length ? null : secretFor(this.search);
+  }
+
+  /**
+   * Every hero excluded, deliberately — not merely an empty pool.
+   * A complexity or role filter empties the pool too, and that has its own copy.
+   */
+  get everyoneExcluded(): boolean {
+    return this.heroes.length > 0 && this.heroes.every((hero) => this.excluded.has(hero.id));
   }
 
   get rollLabel(): string {
@@ -196,6 +242,7 @@ export class OracleStore {
     if (saved.roles) this.roles = new Set(saved.roles);
     if (saved.avoidRecent !== undefined) this.avoidRecent = saved.avoidRecent;
     if (saved.releasedOnly !== undefined) this.releasedOnly = saved.releasedOnly;
+    if (saved.arcane !== undefined) this.arcane = saved.arcane;
   }
 
   private persist(): void {
@@ -210,6 +257,7 @@ export class OracleStore {
       roles: [...this.roles],
       avoidRecent: this.avoidRecent,
       releasedOnly: this.releasedOnly,
+      arcane: this.arcane,
     });
   }
 
@@ -350,8 +398,13 @@ export class OracleStore {
   }
 
   private recordDraw(heroes: Hero[]): void {
+    const before = this.pickCount;
     for (const hero of heroes) this.tally[hero.id] = (this.tally[hero.id] || 0) + 1;
     this.pickCount += heroes.length;
+    // A slot reroll lands here too, so it counts toward a milestone — it is a
+    // draw the user asked for and the tally already treats it as one.
+    const mark = milestoneCrossed(before, this.pickCount);
+    if (mark) this.showToast(milestoneLine(mark));
     const drawn = new Set(heroes.map((hero) => hero.id));
     const picks = heroes.map(({ id, name }) => ({ id, name }));
     this.recent = [...picks, ...this.recent.filter((pick) => !drawn.has(pick.id))].slice(0, RECENT_LIMIT);
@@ -383,8 +436,24 @@ export class OracleStore {
   /** Tally, recents and the address bar — the irreversible half of a draw. */
   private bankDraw(heroes: Hero[]): void {
     this.recordDraw(heroes);
+    this.noteStreak(heroes);
     this.persist();
     writeHash(heroes);
+  }
+
+  /**
+   * Track the same hero coming up again and again — see lib/eggs.
+   *
+   * Whole solo draws only. `recent` cannot answer this, because it de-duplicates
+   * on write, and a slot reroll is excluded on purpose: it draws from a pool
+   * with the current hero removed, so it can never repeat one anyway.
+   */
+  private noteStreak(heroes: Hero[]): void {
+    const solo = heroes.length === 1 ? heroes[0] : null;
+    if (!solo) { this.streakId = ''; this.streakCount = 0; return; }
+    this.streakCount = solo.id === this.streakId ? this.streakCount + 1 : 1;
+    this.streakId = solo.id;
+    if (this.streakCount === INSISTENT_AT) this.showToast(insistentLine(solo.name, this.streakCount));
   }
 
   /**
@@ -412,7 +481,22 @@ export class OracleStore {
   /** The roll button. A draw the user asked for is always real. */
   roll(): void {
     this.provisional = false;
+    // Space stays live on an empty stage, so a roll that cannot draw anything
+    // must not count: being told to be patient after producing nothing is just
+    // wrong. Checked against the same pool openDraw is about to build.
+    if (this.heroes.length && poolFor(this.squadSize, this.criteria).length) this.noteRollPace();
+    // After the pace check, so a milestone or streak line drawn by this very
+    // roll replaces the scolding rather than the other way round.
     this.openDraw(true);
+  }
+
+  /** Five rolls inside three seconds earns a word — see lib/eggs. */
+  private noteRollPace(): void {
+    const now = Date.now();
+    this.rollTimes = [...this.rollTimes, now].filter((at) => now - at < IMPATIENT_WINDOW_MS);
+    if (!isImpatient(this.rollTimes)) { this.scolded = false; return; }
+    // Once per burst: the sixth and seventh rolls should not repeat it.
+    if (!this.scolded) { this.scolded = true; this.showToast(IMPATIENT_LINE); }
   }
 
   /** Reroll a single squad slot, keeping the rest of the stack intact. */
@@ -498,6 +582,45 @@ export class OracleStore {
     runInAction(() => {
       this.showToast(copied ? 'Draw link copied to clipboard.' : 'Copy failed — the link is in your address bar.');
     });
+  }
+
+  /**
+   * Every keystroke outside a text field, for the Konami code — see lib/eggs.
+   *
+   * Deliberately not observable work: this only moves a counter, so a key that
+   * is not part of the sequence costs nothing and re-renders nothing.
+   */
+  noteKey(code: string): void {
+    this.konami = advanceSequence(KONAMI, this.konami, code);
+    if (this.konami === KONAMI.length) {
+      this.konami = 0;
+      this.arcane = !this.arcane;
+      this.persist();
+      this.showToast(this.arcane ? ARCANE_ON : ARCANE_OFF);
+    }
+    // The keyboard route to the prophecy the eyebrow taps produce.
+    this.invocation = advanceSequence(INVOCATION, this.invocation, code);
+    if (this.invocation === INVOCATION.length) {
+      this.invocation = 0;
+      this.speakProphecy();
+    }
+  }
+
+  /** Seven quick taps on the stage eyebrow and the oracle offers a prophecy. */
+  tapEyebrow(): void {
+    const now = Date.now();
+    this.taps = now - this.lastTap < TAP_WINDOW_MS ? this.taps + 1 : 1;
+    this.lastTap = now;
+    if (this.taps < EYEBROW_TAPS) return;
+    this.taps = 0;
+    this.speakProphecy();
+  }
+
+  /** Shared by both routes to the prophecy: seven taps, or typing "oracle". */
+  private speakProphecy(): void {
+    // A fresh generator: the store's own rng belongs to the draw, and borrowing
+    // it here would advance the sequence a draw is about to use.
+    this.showToast(prophecy(mulberry32(randomSeed())));
   }
 
   showToast(message: string): void {

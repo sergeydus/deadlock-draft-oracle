@@ -18,6 +18,8 @@ export interface PersistedState {
   roles: string[];
   avoidRecent: boolean;
   releasedOnly: boolean;
+  /** Arcane mode, from lib/eggs. Persisted so a found egg stays found. */
+  arcane: boolean;
 }
 
 /**
@@ -97,6 +99,7 @@ export function loadState(): Partial<PersistedState> {
     if (typeof avoidRecent === 'boolean') out.avoidRecent = avoidRecent;
     const releasedOnly = data.releasedOnly ?? data.releasedToggle;
     if (typeof releasedOnly === 'boolean') out.releasedOnly = releasedOnly;
+    if (typeof data.arcane === 'boolean') out.arcane = data.arcane;
     return out;
   } catch {
     return {}; // corrupt data – start fresh

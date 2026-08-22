@@ -22,6 +22,10 @@ import { mergeInto, parseRoster } from '../src/lib/roster.ts';
 import { isHeroRecord, isRecentPick, loadState } from '../src/lib/storage.ts';
 import { clearHash, isOwnHash, parseSquadHash, squadToHash, writeHash } from '../src/lib/share.ts';
 import { cssUrl } from '../src/lib/css.ts';
+import {
+  ARCANE_ON, EYEBROW_TAPS, IMPATIENT_LINE, INVOCATION, KONAMI, MILESTONES, PROPHECIES, SECRETS,
+  advanceSequence, isImpatient, milestoneCrossed, milestoneLine, prophecy, secretFor,
+} from '../src/lib/eggs.ts';
 // The store is not the only thing that touches the browser: lib/share reads
 // location and history, and lib/storage reads localStorage. These shims stand in
 // for all of it. The import has to come before the store's, which constructs a
@@ -736,7 +740,24 @@ const spokenEmpty = new OracleStore();
 await spokenEmpty.load();
 for (const id of rosterIds) spokenEmpty.toggleExcluded(id);
 spokenEmpty.roll();
-check('an empty pool explains itself', spokenEmpty.announcement.includes('No hero is eligible'), spokenEmpty.announcement);
+// An empty pool has two causes and they need different advice, so both are
+// checked. Excluding the whole roster is deliberate and gets its own line.
+check('excluding every hero says exactly that',
+  spokenEmpty.announcement.includes('Every hero is excluded'), spokenEmpty.announcement);
+
+resetBrowser();
+stubFetch(feed);
+const spokenFiltered = new OracleStore();
+await spokenFiltered.load();
+// Filters only, no exclusions. Role and complexity are perfectly correlated in
+// this fixture, so "marksman" plus "not complexity 1" leaves nothing.
+spokenFiltered.toggleRole(ROLE_ORDER[0]);
+spokenFiltered.toggleComplexity(1);
+spokenFiltered.roll();
+check('a pool emptied by filters keeps the general advice',
+  spokenFiltered.mode === 'empty' && spokenFiltered.announcement.includes('No hero is eligible'),
+  `${spokenFiltered.mode}: ${spokenFiltered.announcement}`);
+check('and is not mistaken for excluding everyone', spokenFiltered.everyoneExcluded === false);
 
 resetBrowser();
 stubFetch(feed);
@@ -1115,6 +1136,248 @@ check('and it still boots offline',
   stillBoots?.status === 200 && (await stillBoots.text()).includes('index-abc123.js'));
 
 
+/* ── Easter eggs ──
+   Hidden things are the easiest to break, because nothing in normal use tells
+   you they stopped working. src/lib/eggs.ts holds the rules as pure functions
+   so most of this needs no browser at all.
+
+   The one that needs the network is the collision check: a "secret" search term
+   that happens to match a real hero silently stops being an egg, and aliases
+   carry seventeen languages, so this cannot be eyeballed. It lives with the
+   live-feed checks further down. */
+section('easter eggs');
+
+// The Konami code, as physical key positions rather than letters.
+let konami = 0;
+for (const code of KONAMI) konami = advanceSequence(KONAMI, konami, code);
+check('the full sequence completes', konami === KONAMI.length, `${konami}/${KONAMI.length}`);
+check('a wrong key resets it', advanceSequence(KONAMI, 4, 'KeyZ') === 0);
+// Without this, a hesitant extra ArrowUp would poison the attempt and the code
+// would feel broken instead of hidden.
+check('a stray first key restarts rather than resets', advanceSequence(KONAMI, 4, KONAMI[0]) === 1);
+check('an empty sequence is not complete', advanceSequence(KONAMI, 0, 'KeyZ') !== KONAMI.length);
+// The two sequences share the matcher and must not interfere: KONAMI ends KeyB
+// KeyA, and INVOCATION contains KeyA.
+let invocation = 0;
+for (const code of INVOCATION) invocation = advanceSequence(INVOCATION, invocation, code);
+check('the invocation completes on its own', invocation === INVOCATION.length);
+check('a Konami key does not advance the invocation',
+  advanceSequence(INVOCATION, 2, 'ArrowUp') === 0);
+
+// Secret searches: shape only here — collisions are checked against live feeds.
+check('a secret term answers', secretFor('oracle') !== null, secretFor('oracle') ?? '');
+check('it is case and space insensitive', secretFor('  ORACLE ') === secretFor('oracle'));
+check('an ordinary miss says nothing', secretFor('zzzz') === null);
+check('every secret has non-empty copy',
+  Object.values(SECRETS).every((line) => line.trim().length > 10), `${Object.keys(SECRETS).length} terms`);
+
+// Milestones have to detect crossing: a squad draw of six steps over the mark.
+check('a milestone is caught when stepped over', milestoneCrossed(49, 55) === 50, String(milestoneCrossed(49, 55)));
+check('and when landed on exactly', milestoneCrossed(49, 50) === 50);
+check('a quiet stretch reports nothing', milestoneCrossed(51, 55) === null);
+check('it never re-fires for the same mark', milestoneCrossed(50, 56) === null);
+check('the lowest mark still reads sensibly', milestoneLine(50).length > 10, milestoneLine(50));
+check('every milestone has its own line',
+  new Set(MILESTONES.map(milestoneLine)).size === MILESTONES.length);
+
+// Prophecies are drawn with the caller's generator — no Math.random anywhere.
+const prophecyRng = mulberry32(99);
+check('a prophecy comes back', PROPHECIES.includes(prophecy(prophecyRng)));
+check('the same seed gives the same prophecy', prophecy(mulberry32(7)) === prophecy(mulberry32(7)));
+const seenProphecies = new Set();
+for (let i = 0; i < 400; i++) seenProphecies.add(prophecy(mulberry32(i)));
+check('every prophecy is reachable', seenProphecies.size === PROPHECIES.length,
+  `${seenProphecies.size}/${PROPHECIES.length}`);
+
+check('impatience needs the full burst', !isImpatient([1, 2, 3, 4]) && isImpatient([1, 2, 3, 4, 5]));
+
+/* ── The eggs as the store actually fires them ── */
+
+const EGG_IDS = ['abrams', 'bebop', 'dynamo', 'haze', 'infernus', 'lash', 'seven', 'talon'];
+const eggFeed = EGG_IDS.map((id) => ({
+  name: id, class_name: `hero_${id}`, complexity: 2, hero_type: 'mystic',
+  images: { icon_hero_card: `https://assets.test/${id}.png` }, description: 'a blurb',
+}));
+
+const freshStore = async () => {
+  resetBrowser();
+  stubFetch(eggFeed);
+  const store = new OracleStore();
+  await store.load();
+  return store;
+};
+
+// Arcane mode, and that it survives a reload — a found egg should stay found.
+const arcane = await freshStore();
+check('arcane mode starts off', arcane.arcane === false);
+for (const code of KONAMI) arcane.noteKey(code);
+check('the Konami code turns it on', arcane.arcane === true);
+check('and says so', arcane.toastMessage === ARCANE_ON, arcane.toastMessage);
+for (const code of KONAMI) arcane.noteKey(code);
+check('entering it again turns it off', arcane.arcane === false, arcane.toastMessage);
+for (const code of KONAMI) arcane.noteKey(code);
+resetBrowser({ keepStorage: true });
+stubFetch(eggFeed);
+const eggReloaded = new OracleStore();
+await eggReloaded.load();
+check('arcane mode survives a reload', eggReloaded.arcane === true);
+
+// Typing must not trigger it: App only forwards keys from outside text fields,
+// but the store should not be the thing that assumes that.
+const searching = await freshStore();
+searching.setSearch('oracle');
+check('a secret search answers instead of shrugging',
+  searching.secretSignal === SECRETS.oracle, String(searching.secretSignal));
+searching.setSearch('haze');
+check('a search that finds someone stays silent', searching.secretSignal === null);
+searching.setSearch('zzzz');
+check('an ordinary miss stays a miss', searching.secretSignal === null);
+
+// The insistent oracle. Pinning the pool to one hero is the reliable path:
+// poolFor relaxes avoid-recent rather than starve the draw.
+const insistent = await freshStore();
+// load() draws on its own, and that opening draw already banked a hero. Pin the
+// pool to a DIFFERENT one, or one run in eight starts the streak at two and this
+// section fails at random.
+const opener = insistent.squad[0].id;
+const pinned = EGG_IDS.find((id) => id !== opener);
+for (const id of EGG_IDS) if (id !== pinned) insistent.toggleExcluded(id);
+insistent.roll();
+check('one draw is not a streak', insistent.streakCount === 1, `${opener} then ${pinned}: count=${insistent.streakCount}`);
+insistent.roll();
+check('two is not either', insistent.streakCount === 2 && !insistent.toastMessage.includes('not changing'));
+insistent.roll();
+check('three and the oracle comments', insistent.streakCount === 3 && insistent.toastMessage.includes('not changing its mind'),
+  insistent.toastMessage);
+check('it names the hero it keeps choosing', insistent.toastMessage.includes(insistent.squad[0].name),
+  insistent.toastMessage);
+// A different hero has to break the run.
+insistent.toggleExcluded(opener);
+insistent.toggleExcluded(pinned);
+insistent.roll();
+check('a different hero resets the count',
+  insistent.streakCount === 1 && insistent.squad[0].id === opener, `count=${insistent.streakCount}`);
+
+// A squad draw is nobody's streak.
+const squadStreak = await freshStore();
+squadStreak.setSquadSize(4);
+squadStreak.roll();
+check('a squad draw holds no streak', squadStreak.streakCount === 0 && squadStreak.streakId === '');
+
+// Milestones, driven through real draws rather than the pure helper.
+// avoid-recent stays ON: with it off, a three-run can happen inside the
+// warm-up, and the streak toast would overwrite the milestone one at random.
+// With it on and eight heroes, the pool never lets a hero repeat, so no other
+// egg can fire here.
+const milestone = await freshStore();
+while (milestone.pickCount < 49) milestone.roll();
+check('no milestone before the mark', !milestone.toastMessage.includes('Fifty'), milestone.toastMessage);
+milestone.roll();
+check('crossing fifty is announced', milestone.toastMessage.includes('Fifty'), milestone.toastMessage);
+// showToast leaves the text behind after hiding, so the Toast can fade out —
+// a stale line is not evidence that it fired again. Clear it, then look.
+milestone.showToast('cleared');
+milestone.roll();
+check('and not announced again', !milestone.toastMessage.includes('Fifty'), milestone.toastMessage);
+
+// Impatience. Five rolls inside the window, scolded once.
+// Same reason as above: no repeats means no streak line racing this one.
+const hurried = await freshStore();
+for (let i = 0; i < 5; i++) hurried.roll();
+check('five quick rolls earn a word', hurried.toastMessage === IMPATIENT_LINE, hurried.toastMessage);
+hurried.showToast('cleared');
+hurried.roll();
+check('the sixth does not repeat it', hurried.toastMessage !== IMPATIENT_LINE, hurried.toastMessage);
+
+// Two eggs can land on one draw. noteStreak runs after recordDraw, so the
+// streak line is the one left standing — asserted here so a reordering that
+// changes it is a visible decision rather than a silent one.
+const collided = await freshStore();
+collided.setAvoidRecent(false);
+const pinnedId = collided.heroes.find((hero) => hero.id !== collided.squad[0].id).id;
+for (const hero of collided.heroes) if (hero.id !== pinnedId) collided.toggleExcluded(hero.id);
+collided.tally = {};
+// 47 + three draws lands the 50th pick on the same roll that completes the
+// three-run, which is the only moment the two eggs can collide.
+collided.pickCount = 47;
+collided.roll();
+collided.roll();
+collided.roll();
+check('when a streak and a milestone collide, the streak speaks',
+  collided.pickCount >= 50 && collided.streakCount === 3 && collided.toastMessage.includes('not changing its mind'),
+  `count=${collided.streakCount} picks=${collided.pickCount}: ${collided.toastMessage}`);
+
+// The prophecy tap.
+const tapped = await freshStore();
+for (let i = 0; i < EYEBROW_TAPS - 1; i++) tapped.tapEyebrow();
+check('six taps say nothing', !PROPHECIES.includes(tapped.toastMessage), tapped.toastMessage);
+tapped.tapEyebrow();
+check('the seventh brings a prophecy', PROPHECIES.includes(tapped.toastMessage), tapped.toastMessage);
+
+// The prophecy has a keyboard route, because the eyebrow has none. Same egg,
+// one route per input device.
+const typed = await freshStore();
+for (const code of INVOCATION) typed.noteKey(code);
+check('typing the invocation brings a prophecy', PROPHECIES.includes(typed.toastMessage), typed.toastMessage);
+check('a partial invocation says nothing', await (async () => {
+  const partial = await freshStore();
+  for (const code of INVOCATION.slice(0, 4)) partial.noteKey(code);
+  return !PROPHECIES.includes(partial.toastMessage);
+})());
+// Both sequences run off the same keystrokes, so neither may eat the other.
+const both = await freshStore();
+for (const code of KONAMI) both.noteKey(code);
+check('the Konami code still works alongside it', both.arcane === true);
+check('and it did not also fire a prophecy', !PROPHECIES.includes(both.toastMessage), both.toastMessage);
+
+// A screen reader has to get the oracle's answer too, not "0 heroes match".
+const heard = await freshStore();
+heard.setSearch('oracle');
+check('the secret search is announced, not counted',
+  heard.rosterAnnouncement === SECRETS.oracle, heard.rosterAnnouncement);
+heard.setSearch('zzzz');
+check('an ordinary miss is still counted', heard.rosterAnnouncement.includes('heroes match'),
+  heard.rosterAnnouncement);
+
+// Space stays live on an empty stage; rolls that cannot draw must not count.
+const futile = await freshStore();
+for (const hero of futile.heroes) futile.toggleExcluded(hero.id);
+futile.roll();
+const futilePicks = futile.pickCount;
+futile.showToast('cleared');
+for (let i = 0; i < 6; i++) futile.roll();
+check('rolls that draw nothing do not earn a scolding',
+  futile.pickCount === futilePicks && futile.toastMessage !== IMPATIENT_LINE,
+  `${futile.pickCount - futilePicks} draws: ${futile.toastMessage}`);
+
+// Excluding the whole roster is its own state, distinct from an empty pool.
+const nobody = await freshStore();
+check('a healthy roster is not "everyone excluded"', nobody.everyoneExcluded === false);
+for (const id of EGG_IDS) nobody.toggleExcluded(id);
+nobody.roll();
+check('excluding every hero is recognised', nobody.everyoneExcluded === true);
+check('and the stage is empty', nobody.mode === 'empty', nobody.mode);
+// The spoken line has to match the seen one, or a screen-reader user is told to
+// clear exclusions they never made.
+check('the announcement matches the stage copy',
+  nobody.announcement.includes('Every hero is excluded'), nobody.announcement);
+// A filter that empties the pool must NOT read as excluding everyone, or the
+// wrong copy tells the user to un-exclude heroes they never excluded.
+const filtered = await freshStore();
+for (const level of COMPLEXITY_LEVELS.slice(1)) filtered.toggleComplexity(level);
+filtered.toggleExcluded(EGG_IDS[0]);
+check('an empty pool from filters is not "everyone excluded"', filtered.everyoneExcluded === false);
+
+// No egg may touch the draw itself.
+const fair = await freshStore();
+const poolBefore = fair.eligible.length;
+for (const code of KONAMI) fair.noteKey(code);
+fair.tapEyebrow();
+check('finding an egg changes nothing about the pool', fair.eligible.length === poolBefore,
+  `${poolBefore} → ${fair.eligible.length}`);
+
+restoreFetch();
+
 /* ── Live feeds through the shipped parser ── */
 
 const parsed = {};
@@ -1148,6 +1411,18 @@ if (offline) {
       check(`${source.name}: accents are valid hex`,
         heroes.every((h) => !h.accent || /^#[0-9a-f]{6}$/i.test(h.accent)),
         `${heroes.filter((h) => h.accent).length}/${heroes.length} have one`);
+      // A "secret" search term that matches a real hero silently stops being a
+      // secret: the user gets a hero card and never sees the answer. Aliases
+      // carry seventeen languages plus romanizations, so this cannot be
+      // eyeballed — it has to be run against what the feed actually ships.
+      const collisions = Object.keys(SECRETS).filter((term) =>
+        heroes.some((h) => `${h.name.toLowerCase()} ${h.aliases}`.includes(term)));
+      check(`${source.name}: no secret search term matches a hero`, collisions.length === 0,
+        collisions.join(', ') || `all ${Object.keys(SECRETS).length} terms clear`);
+      // A joke that names a hero rots the day the game renames one.
+      const named = PROPHECIES.filter((line) =>
+        heroes.some((h) => h.name.length > 3 && line.toLowerCase().includes(h.name.toLowerCase())));
+      check(`${source.name}: no prophecy names a hero`, named.length === 0, named.join(' | ') || 'all roster-independent');
       parsed[source.name] = heroes;
     } catch (error) {
       check(`${source.name}: reachable`, false, String(error?.message ?? error));

@@ -50,8 +50,12 @@ export const RosterPanel = observer(function RosterPanel() {
           batches of cards. The count below says the useful part instead. */}
       <div className="roster-grid">
         {heroes.map((hero) => <HeroCard hero={hero} key={hero.id} />)}
+        {/* A handful of searches get an answer rather than a shrug — see
+            lib/eggs. Anything else keeps the ordinary no-match copy. */}
         {!heroes.length && store.heroes.length > 0 && (
-          <p className="empty-roster">No hero matches that signal.</p>
+          <p className={classes('empty-roster', store.secretSignal && 'secret-signal')}>
+            {store.secretSignal ?? 'No hero matches that signal.'}
+          </p>
         )}
       </div>
       <p className="visually-hidden" role="status" aria-live="polite">{store.rosterAnnouncement}</p>
