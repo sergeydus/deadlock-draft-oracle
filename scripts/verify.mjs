@@ -22,9 +22,10 @@ import { mergeInto, parseRoster } from '../src/lib/roster.ts';
 import { isHeroRecord, isRecentPick, loadState } from '../src/lib/storage.ts';
 import { clearHash, isOwnHash, parseSquadHash, squadToHash, writeHash } from '../src/lib/share.ts';
 import { cssUrl } from '../src/lib/css.ts';
-// The store is not pure: it reads localStorage and writes the URL. These shims
-// stand in for the browser so it can be exercised here. The import has to come
-// before the store's, which constructs a singleton as it is evaluated.
+// The store is not the only thing that touches the browser: lib/share reads
+// location and history, and lib/storage reads localStorage. These shims stand in
+// for all of it. The import has to come before the store's, which constructs a
+// singleton as it is evaluated.
 import { resetBrowser, restoreFetch, storage, stubFetch } from './browser-shims.mjs';
 import { loadWorker, shellHtml } from './sw-harness.mjs';
 import { OracleStore } from '../src/store/OracleStore.ts';
