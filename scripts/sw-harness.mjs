@@ -109,6 +109,8 @@ export function loadWorker({
   const shared = { deferring: false, held: [], fetch: null };
   /** Work a fetch handler asked the browser to keep it alive for. */
   const background = [];
+  /** The most recent fetch event, so a test can try to extend it too late. */
+  let lastEvent = null;
 
   const respond = async (input, init) => {
     const made = input instanceof Request ? input : new Request(input, init);
@@ -162,11 +164,38 @@ export function loadWorker({
     const made = new Request(url, { method: 'GET', ...init });
     if (mode) Object.defineProperty(made, 'mode', { value: mode });
     let answered = null;
-    listeners.get('fetch')({
+
+    // An ExtendableEvent accepts waitUntil() while it is *active*, which the
+    // spec defines as: still dispatching, or holding at least one unsettled
+    // extend-lifetime promise. respondWith() contributes one of those, so a
+    // waitUntil() after an await inside respondWith is legal — confirmed
+    // against Chrome. Only a call made after the response has settled throws.
+    // Modelling the real rule rather than "synchronous only" is the difference
+    // between catching that bug and inventing one.
+    let dispatching = true;
+    let unsettled = 0;
+    const extend = (promise) => {
+      unsettled++;
+      Promise.resolve(promise).then(() => { unsettled--; }, () => { unsettled--; });
+    };
+
+    const event = {
       request: made,
-      respondWith: (promise) => { answered = promise; },
-      waitUntil: (promise) => { background.push(promise); },
-    });
+      respondWith: (promise) => { answered = promise; extend(promise); },
+      waitUntil: (promise) => {
+        if (!dispatching && unsettled === 0) {
+          const tooLate = new Error("Failed to execute 'waitUntil': the event is not active");
+          tooLate.name = 'InvalidStateError';
+          throw tooLate;
+        }
+        background.push(promise);
+        extend(promise);
+      },
+    };
+
+    lastEvent = event;
+    listeners.get('fetch')(event);
+    dispatching = false;
     return answered ? await answered : null;
   };
 
@@ -182,6 +211,8 @@ export function loadWorker({
 
   return {
     self, calls, caches, background,
+    /** The last fetch event dispatched — its waitUntil now refuses late calls. */
+    get lastEvent() { return lastEvent; },
     install: () => lifecycle('install'),
     activate: () => lifecycle('activate'),
     request, defer, settle, terminate,

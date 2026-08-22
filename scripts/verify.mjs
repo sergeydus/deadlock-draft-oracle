@@ -1059,6 +1059,17 @@ await lively.settle();
 check('and settling that registered work lands it',
   (await (await lively.caches.open(SW_CACHE)).match(swExtra)) !== undefined);
 
+// The window for extending a fetch event is not "synchronously, during
+// dispatch" — it is while the event is still active, and respondWith's own
+// promise keeps it active. Verified against Chrome: a waitUntil after an await
+// inside respondWith is accepted (every check above depends on that), and one
+// made after the response has settled throws. The harness enforces the same
+// rule, so an edit that moves a call genuinely too late is caught here.
+let swTooLate = 'accepted';
+try { lively.lastEvent.waitUntil(Promise.resolve()); } catch (error) { swTooLate = error.name; }
+check('extending the event after the response has settled is refused',
+  swTooLate === 'InvalidStateError', swTooLate);
+
 /* A deploy usually leaves sw.js byte-identical, so there is no reinstall: the
    running worker meets the new build through an online navigation. If it takes
    the new HTML before the new hashes are stored, the offline shell points at
