@@ -23,7 +23,8 @@ npm run preview    # serve the built bundle at the origin root
 npm run preview:subpath   # …and at the /deadlock-draft-oracle/ path Pages uses
 ```
 
-Needs Node 23.6+ (CI pins 24, and `.nvmrc` names it). `npm test` goes through
+Needs Node 22.6+, and runs without a flag from 23.6 (CI pins 24, and `.nvmrc`
+names it). `npm test` goes through
 `scripts/test.mjs`, which adds `--experimental-strip-types` on Node 22.6–23.5 and
 otherwise says what to install — the raw failure is an `ERR_UNKNOWN_FILE_EXTENSION`
 that mentions no version at all.

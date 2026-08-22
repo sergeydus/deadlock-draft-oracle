@@ -3,9 +3,21 @@ import { COMPLEXITY_LEVELS, RECENT_LIMIT, ROLE_ORDER, SOURCES, TALLY_ROWS } from
 import { drawFrom, drawSquad, mulberry32, randomSeed, type Rng } from '../lib/random.ts';
 import { eligibleHeroes, hasRoleData, poolFor, type PoolCriteria } from '../lib/pool.ts';
 import { fetchEnrichment, fetchRoster, mergeInto } from '../lib/roster.ts';
-import { clearHash, copyToClipboard, isOwnHash, readSharedDraw, writeHash } from '../lib/share.ts';
+import { clearHash, copyToClipboard, hasUnresolvedShare, isOwnHash, readSharedDraw, writeHash } from '../lib/share.ts';
 import { loadCachedRoster, loadState, saveCachedRoster, saveState } from '../lib/storage.ts';
 import type { Hero, RecentPick, StatusKind } from '../types.ts';
+
+/**
+ * How far the roster on screen can be trusted.
+ *
+ * `provisional` — from the cache, with nothing to confirm it. Paint only: do not
+ *   prune saved ids against it, and do not bank the draw it opens with.
+ * `cached` — no feed answered, so the cache is all there is. Authoritative, but
+ *   still not a complete picture of upstream.
+ * `live` — a feed answered. The only state entitled to conclude that a hero a
+ *   share link names no longer exists.
+ */
+type RosterConfidence = 'provisional' | 'cached' | 'live';
 
 /** What the stage should be showing. */
 export type StageMode = 'loading' | 'draw' | 'empty' | 'offline';
@@ -222,7 +234,7 @@ export class OracleStore {
   private primeFromCache(): string | null {
     const cached = loadCachedRoster();
     if (!cached) return null;
-    this.adoptRoster(cached.heroes, `${cached.source} (cached)`, { authoritative: false });
+    this.adoptRoster(cached.heroes, `${cached.source} (cached)`, 'provisional');
     return cached.source;
   }
 
@@ -260,7 +272,7 @@ export class OracleStore {
         if (primed) {
           // Nothing answered, so the cache is the best there is: promote it and
           // let the reconciliation that priming deliberately skipped run now.
-          this.adoptRoster(this.heroes, this.source);
+          this.adoptRoster(this.heroes, this.source, 'cached');
           this.setStatus(`Cached roster · ${primed}`, 'error');
         } else if (this.heroes.length) {
           // A failed manual refresh keeps whatever roster is already on screen.
@@ -289,17 +301,18 @@ export class OracleStore {
   /**
    * Put a roster on screen.
    *
-   * @param authoritative false while this is the cached roster and the network
-   *   has not answered. Everything irreversible is gated on it: pruning saved
-   *   ids would delete the exclusion of a hero the cache simply predates, and
-   *   recording the opening draw would bank a pick that may not survive the
-   *   handover. Both are done once a feed confirms the roster — or once every
-   *   feed has failed and the cache becomes all there is.
+   * @param confidence gates everything irreversible. Against a merely
+   *   provisional roster, pruning saved ids would delete the exclusion of a
+   *   hero the cache simply predates, and banking the opening draw would keep
+   *   a pick that may not survive the handover. Against anything short of
+   *   `live`, overwriting the hash would destroy a share link that is
+   *   unresolvable only because this roster is incomplete.
    */
-  private adoptRoster(heroes: Hero[], sourceName: string, { authoritative = true } = {}): void {
+  private adoptRoster(heroes: Hero[], sourceName: string, confidence: RosterConfidence = 'live'): void {
     this.heroes = heroes;
     this.source = sourceName;
     const byId = this.byId;
+    const authoritative = confidence !== 'provisional';
     if (authoritative) {
       // Restored ids may name heroes the roster no longer has.
       this.excluded = new Set([...this.excluded].filter((id) => byId.has(id)));
@@ -310,6 +323,11 @@ export class OracleStore {
     const wasProvisional = this.provisional;
     this.provisional = !authoritative;
 
+    // A link this roster cannot read is not necessarily a dead link — it may
+    // simply predate the roster. Leave the address bar alone and do not bank a
+    // fallback draw over it, so reconnecting still recovers the sender's draw.
+    const stranded = confidence !== 'live' && hasUnresolvedShare(byId);
+
     // A shared link wins over a fresh roll so the recipient sees the sender's draw.
     // Every roll writes the hash as well, so the marker is what separates a link
     // somebody sent from the one this tab left in its own address bar; without
@@ -318,9 +336,9 @@ export class OracleStore {
     const shared = readSharedDraw(byId);
     if (shared.length && !isOwnHash()) this.commitDraw(shared, { record: false, shared: true });
     // A manual refresh keeps the pick already on screen; only a cold start draws.
-    else if (!this.squad.length) this.openDraw(authoritative);
+    else if (!this.squad.length) this.openDraw(authoritative && !stranded);
     // The provisional pick survived into a confirmed roster, so it counts now.
-    else if (authoritative && wasProvisional && !this.shared) this.bankDraw(this.squad);
+    else if (authoritative && wasProvisional && !this.shared && !stranded) this.bankDraw(this.squad);
   }
 
   private setStatus(message: string, kind: StatusKind = ''): void {
@@ -388,8 +406,8 @@ export class OracleStore {
       this.shared = false;
       this.mode = 'empty';
       // Otherwise the URL still names the old draw, and reloading restores it —
-      // excluded heroes included.
-      clearHash();
+      // excluded heroes included. An unresolved share link is not ours to drop.
+      if (!hasUnresolvedShare(this.byId)) clearHash();
       return;
     }
     this.commitDraw(drawSquad(pool, this.squadSize, { coverRoles: this.coverRoles, rng: this.rng }), { record });

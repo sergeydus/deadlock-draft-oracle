@@ -68,6 +68,21 @@ export function clearHash(): void {
   history.replaceState(rest, '', `${location.pathname}${location.search}`);
 }
 
+/**
+ * True when the address bar names a draw that *this* roster cannot resolve.
+ *
+ * The third state between "no share link" and "a share link we restored": a
+ * link for a hero the roster in hand has never heard of. Only a live roster is
+ * entitled to conclude that hero is gone — a cached or incomplete one must
+ * leave the hash alone, or a link that would work again on reconnect is
+ * destroyed while offline.
+ */
+export function hasUnresolvedShare(byId: ReadonlyMap<string, Hero>): boolean {
+  if (isOwnHash()) return false;
+  const ids = parseSquadHash(location.hash);
+  return ids.length > 0 && ids.every((id) => !byId.has(id));
+}
+
 export function readSharedDraw(byId: ReadonlyMap<string, Hero>): Hero[] {
   return parseSquadHash(location.hash)
     .map((id) => byId.get(id))

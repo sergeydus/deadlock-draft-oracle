@@ -478,6 +478,37 @@ check('a dead network promotes the cache and banks its draw', promoted.pickCount
 check('and reconciles saved state against it', !promoted.excluded.has('nobody'), [...promoted.excluded].join(','));
 check('the draw is in the address bar once it is real', location.hash.startsWith('#squad='), location.hash);
 
+// A link naming a hero this roster cannot resolve is not a dead link — it may
+// just predate the roster. Overwriting the hash there loses it for good: the
+// user reconnects and the link is no longer in the address bar to retry.
+await seedRosterCache();
+resetBrowser({ hash: '#squad=wraith', state: null, keepStorage: true });
+storage.delete('draftOracle_v1');
+stubFetch('fail');
+const strandedLink = await quietly(async () => { const store = new OracleStore(); await store.load(); return store; });
+check('an unresolvable share link keeps its place in the address bar', location.hash === '#squad=wraith', location.hash);
+check('the fallback draw is shown', strandedLink.mode === 'draw' && strandedLink.squad.length === 1, squadIds(strandedLink));
+check('but is not banked over the link it stands in for', strandedLink.pickCount === 0, `pickCount=${strandedLink.pickCount}`);
+check('so the tally stays clean', Object.keys(strandedLink.tally).length === 0, JSON.stringify(strandedLink.tally));
+
+// …and reconnecting recovers it, which is the whole point of preserving it.
+resetBrowser({ hash: location.hash, state: history.state, keepStorage: true });
+stubFetch(feedFor([...CACHED_IDS, 'wraith']));
+const reconnected = new OracleStore();
+await reconnected.load();
+check('reconnecting recovers the sender\u2019s draw', squadIds(reconnected) === 'wraith', squadIds(reconnected));
+check('and it is still SHARED DRAW', reconnected.shared, reconnected.stageLabel);
+
+// A live roster that genuinely does not have the hero is a different case: the
+// link is dead, and the app is entitled to take the address bar back.
+resetBrowser({ hash: '#squad=nobody', state: null });
+stubFetch(liveFeed);
+const deadLink = new OracleStore();
+await deadLink.load();
+check('a live roster may conclude an unknown hero is gone',
+  deadLink.pickCount === 1 && location.hash !== '#squad=nobody' && location.hash.startsWith('#squad='),
+  `${location.hash} pickCount=${deadLink.pickCount}`);
+
 // Back/forward onto an entry this tab wrote.
 resetBrowser();
 stubFetch(liveFeed);
