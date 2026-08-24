@@ -518,6 +518,42 @@ check('and is narrowed on the way in',
   JSON.stringify(migrated.recent));
 check('the names survive the narrowing', migrated.recent.map((pick) => pick.name).join(',') === 'Haze,Lash');
 
+// Counts are counts. `Number.isFinite` let fractions through, and a stored
+// squadSize of 1.5 restored into a state no chip represents: it drew two heroes
+// and the stage read "DRAW 2.5".
+resetBrowser();
+storage.set('draftOracle_v1', JSON.stringify({ squadSize: 1.5, pickCount: 0.5, tally: { haze: 2.7, lash: 3 } }));
+const fractional = loadState();
+check('a fractional squad size is refused', fractional.squadSize === undefined, String(fractional.squadSize));
+check('a fractional pick count is refused', fractional.pickCount === undefined, String(fractional.pickCount));
+check('a fractional tally entry is dropped', fractional.tally.haze === undefined, JSON.stringify(fractional.tally));
+check('a whole tally entry beside it is kept', fractional.tally.lash === 3, JSON.stringify(fractional.tally));
+
+resetBrowser();
+storage.set('draftOracle_v1', JSON.stringify({ squadSize: 9, pickCount: 1e308 * 10, tally: { haze: 2 } }));
+const absurd = loadState();
+check('an oversized squad still clamps to a full stack', absurd.squadSize === 6, String(absurd.squadSize));
+check('an infinite pick count is refused', absurd.pickCount === undefined, String(absurd.pickCount));
+
+resetBrowser();
+storage.set('draftOracle_v1', JSON.stringify({ squadSize: 3, pickCount: 12, tally: { haze: 2 } }));
+const sane = loadState();
+check('ordinary whole numbers still load',
+  sane.squadSize === 3 && sane.pickCount === 12 && sane.tally.haze === 2, JSON.stringify(sane));
+
+// And end to end: a hand-edited profile must not leave the store somewhere the
+// UI has no way to describe.
+resetBrowser();
+storage.set('draftOracle_v1', JSON.stringify({ squadSize: 1.5, pickCount: 0.5 }));
+stubFetch(feed);
+const repaired = new OracleStore();
+await repaired.load();
+check('a fractional profile restores to a squad size the chips offer',
+  Number.isSafeInteger(repaired.squadSize) && repaired.squadSize >= 1 && repaired.squadSize <= 6,
+  String(repaired.squadSize));
+check('and to a draw count the stage can print',
+  Number.isSafeInteger(repaired.pickCount), repaired.stageLabel);
+
 // Round-trip through a real store.
 resetBrowser();
 stubFetch(feed);

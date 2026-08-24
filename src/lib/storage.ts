@@ -78,14 +78,20 @@ export function loadState(): Partial<PersistedState> {
         .map(({ id, name }: RecentPick) => ({ id, name }))
         .slice(0, RECENT_LIMIT);
     }
+    // Counts are counts. `Number.isFinite` used to be the whole test, which let
+    // a hand-edited squadSize of 1.5 restore into a state no chip represents:
+    // it drew two heroes and the stage printed "DRAW 2.5".
     if (data.tally && typeof data.tally === 'object') {
       out.tally = Object.fromEntries(
         Object.entries(data.tally as Record<string, unknown>)
-          .filter(([, count]) => Number.isFinite(count) && (count as number) > 0) as [string, number][],
+          .filter(([, count]) => Number.isSafeInteger(count) && (count as number) > 0) as [string, number][],
       );
     }
-    if (Number.isFinite(data.pickCount) && data.pickCount >= 0) out.pickCount = data.pickCount;
-    if (Number.isFinite(data.squadSize)) out.squadSize = Math.min(MAX_SQUAD, Math.max(1, data.squadSize));
+    if (Number.isSafeInteger(data.pickCount) && data.pickCount >= 0) out.pickCount = data.pickCount;
+    // Clamped rather than refused: an out-of-range whole number is a schema that
+    // moved, and the nearest legal size is a better answer than losing the
+    // setting. A fraction is not a size at all.
+    if (Number.isSafeInteger(data.squadSize)) out.squadSize = Math.min(MAX_SQUAD, Math.max(1, data.squadSize));
     if (typeof data.coverRoles === 'boolean') out.coverRoles = data.coverRoles;
     // Accepts both the current key names and the pre-2.0 ones.
     const complexity = data.complexity ?? data.complexityFilter;
