@@ -62,7 +62,9 @@ export const SettingsPanel = observer(function SettingsPanel() {
           <p className="eyebrow">DRAFT SETTINGS</p>
           <h2>Shape the chaos</h2>
         </div>
-        <span className="eligible-count">{store.eligible.length} eligible</span>
+        {/* drawPool, not eligible: the number has to be what the roll button
+            will actually draw from. See the getter. */}
+        <span className="eligible-count">{store.drawPool.length} eligible</span>
       </div>
 
       <ToggleRow

@@ -1,4 +1,5 @@
 /** Which heroes a draw may pick from. Pure — the store passes its state in. */
+import { ROLE_ORDER } from '../constants.ts';
 import type { Hero } from '../types.ts';
 
 export interface PoolCriteria {
@@ -14,9 +15,26 @@ export interface PoolCriteria {
   ignoreRecent?: boolean;
 }
 
-/** True once any hero has a role, i.e. the enrichment pass found role data. */
-export function hasRoleData(heroes: readonly Hero[]): boolean {
-  return heroes.some((hero) => hero.role);
+/** Roles the roster actually carries, in canonical order. */
+export function availableRoles(heroes: readonly Hero[]): string[] {
+  return ROLE_ORDER.filter((role) => heroes.some((hero) => hero.role === role));
+}
+
+/**
+ * Whether a role filter may be applied at all.
+ *
+ * This is the same predicate the UI uses to decide whether to show the role
+ * chips, and that is the whole point: filtering by a control the user cannot
+ * see leaves them with an empty pool and no way out. The store's
+ * `showRoleControls` delegates here so the two can never drift.
+ *
+ * Two roles, not one. Roles arrive from the enrichment pass, so a failure there
+ * leaves every hero roleless and a saved filter would empty the pool; a partial
+ * merge that turned up a single role used to be enough to apply the filter while
+ * still being too few for the chips to appear.
+ */
+export function roleFilterUsable(heroes: readonly Hero[]): boolean {
+  return availableRoles(heroes).length > 1;
 }
 
 export function eligibleHeroes(criteria: PoolCriteria): Hero[] {
@@ -26,7 +44,7 @@ export function eligibleHeroes(criteria: PoolCriteria): Hero[] {
   // the enrichment pass, so if that fails (offline, or the other feed is down)
   // no hero has one. Applying the filter then empties the pool — and the role
   // chips are hidden in that state, so there is no control left to clear it.
-  const roleFilter = roles.size && hasRoleData(heroes) ? roles : null;
+  const roleFilter = roles.size && roleFilterUsable(heroes) ? roles : null;
   return heroes.filter((hero) => (!releasedOnly || hero.released)
     && !excluded.has(hero.id)
     && !avoid.has(hero.id)

@@ -17,7 +17,7 @@ import { dirname, join } from 'node:path';
 import { COMPLEXITY_LEVELS, ROLE_ORDER, SOURCES } from '../src/constants.ts';
 import { aliasesFrom, normalise, unwrap } from '../src/lib/feed.ts';
 import { drawFrom, drawSquad, mulberry32 } from '../src/lib/random.ts';
-import { eligibleHeroes, hasRoleData, poolFor } from '../src/lib/pool.ts';
+import { availableRoles, eligibleHeroes, poolFor, roleFilterUsable } from '../src/lib/pool.ts';
 import { mergeInto, parseRoster } from '../src/lib/roster.ts';
 import { isHeroRecord, isRecentPick, loadState } from '../src/lib/storage.ts';
 import { clearHash, isOwnHash, parseSquadHash, squadToHash, writeHash } from '../src/lib/share.ts';
@@ -174,8 +174,25 @@ check('role filter keeps only the selected roles', ids({ roles: new Set(['assass
 check('a hero with no role is excluded while a role filter is active', !ids({ roles: new Set(['assassin']) }).includes('roleless'));
 check('an empty role filter means every role', ids().length === mixed.length - 1, ids().join(', '));
 
-check('hasRoleData detects roles', hasRoleData(mixed));
-check('hasRoleData is false when the merge found none', !hasRoleData(rolelessPool));
+check('availableRoles lists what the roster carries, in canonical order',
+  availableRoles(mixed).join(',') === ROLE_ORDER.filter((role) => mixed.some((h) => h.role === role)).join(','),
+  availableRoles(mixed).join(','));
+check('a roster with no roles offers none', availableRoles(rolelessPool).length === 0);
+check('a role filter is usable once two roles exist', roleFilterUsable(mixed));
+check('a role filter is unusable with no roles at all', !roleFilterUsable(rolelessPool));
+
+// The guard and the role chips have to agree, or a saved filter applies with no
+// control on screen to clear it. They used to disagree on exactly one roster:
+// the chips need two roles to appear, the filter applied on one.
+const oneRole = [
+  hero({ id: 'a', role: 'marksman' }),
+  hero({ id: 'b', role: '' }),
+  hero({ id: 'c', role: '' }),
+];
+check('one role is not enough to filter by', !roleFilterUsable(oneRole), availableRoles(oneRole).join(','));
+check('a saved filter is ignored while the chips are hidden',
+  eligibleHeroes(criteria({ heroes: oneRole, roles: new Set(['assassin']) })).length === oneRole.length,
+  String(eligibleHeroes(criteria({ heroes: oneRole, roles: new Set(['assassin']) })).length));
 
 // Roles only exist after the enrichment pass. A role filter saved from a healthy
 // session must not apply on a later one where enrichment failed: it would match
@@ -408,6 +425,46 @@ const afterEmpty = new OracleStore();
 await afterEmpty.load();
 check('reloading does not resurrect an excluded hero', !afterEmpty.squad.some((member) => member.id === banished), squadIds(afterEmpty));
 check('reloading an emptied pool stays empty', afterEmpty.mode === 'empty', afterEmpty.mode);
+
+// Filters can empty the pool with nothing excluded at all, and the advice used
+// to tell you to clear exclusions you never made.
+resetBrowser();
+stubFetch(feed);
+const filterEmptied = new OracleStore();
+await filterEmptied.load();
+filterEmptied.complexity = new Set([4]);
+filterEmptied.roles = new Set(['marksman']);
+filterEmptied.roll();
+check('a filter combination can empty the pool with nothing excluded',
+  filterEmptied.mode === 'empty' && filterEmptied.excluded.size === 0,
+  `${filterEmptied.mode} ${filterEmptied.excluded.size}`);
+check('the advice does not blame exclusions that do not exist',
+  !/exclusion/i.test(filterEmptied.announcement), filterEmptied.announcement);
+check('the advice names the filters instead', /filter/i.test(filterEmptied.announcement), filterEmptied.announcement);
+check('an emptied pool is still not the everyone-excluded egg',
+  filterEmptied.everyoneExcluded === false);
+
+// The count in the settings header has to mean what the roll button will do.
+// `eligible` is the strict filter; a draw uses poolFor, which relaxes
+// avoid-recent rather than starve itself, so the header could read "0 eligible"
+// beside a button that drew somebody every time it was pressed.
+resetBrowser();
+stubFetch(feed);
+const starvedByRecents = new OracleStore();
+await starvedByRecents.load();
+for (const id of rosterIds.slice(3)) starvedByRecents.excluded.add(id);
+for (let i = 0; i < 6; i++) starvedByRecents.roll();
+check('recents can starve the strict filter',
+  starvedByRecents.eligible.length === 0, String(starvedByRecents.eligible.length));
+check('the count on screen is the pool the roll will use',
+  starvedByRecents.drawPool.length === 3,
+  `${starvedByRecents.eligible.length} strict, ${starvedByRecents.drawPool.length} shown`);
+const starvedBefore = starvedByRecents.pickCount;
+starvedByRecents.roll();
+check('and that roll does draw',
+  starvedByRecents.mode === 'draw' && starvedByRecents.pickCount === starvedBefore + 1, starvedByRecents.mode);
+check('an empty stage and an empty count are the same condition',
+  filterEmptied.drawPool.length === 0 && filterEmptied.mode === 'empty', String(filterEmptied.drawPool.length));
 
 // Settings round-trip, and ids the roster no longer has are pruned.
 resetBrowser();

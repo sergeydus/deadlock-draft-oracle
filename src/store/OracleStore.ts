@@ -1,7 +1,7 @@
 import { makeAutoObservable, runInAction } from 'mobx';
-import { COMPLEXITY_LEVELS, RECENT_LIMIT, ROLE_ORDER, SOURCES, TALLY_ROWS } from '../constants.ts';
+import { COMPLEXITY_LEVELS, RECENT_LIMIT, SOURCES, TALLY_ROWS } from '../constants.ts';
 import { drawFrom, drawSquad, mulberry32, randomSeed, type Rng } from '../lib/random.ts';
-import { eligibleHeroes, poolFor, type PoolCriteria } from '../lib/pool.ts';
+import { availableRoles, eligibleHeroes, poolFor, roleFilterUsable, type PoolCriteria } from '../lib/pool.ts';
 import { fetchEnrichment, fetchRoster, mergeInto } from '../lib/roster.ts';
 import {
   ARCANE_OFF, ARCANE_ON, EYEBROW_TAPS, IMPATIENT_LINE, IMPATIENT_WINDOW_MS, INSISTENT_AT, INVOCATION,
@@ -128,15 +128,31 @@ export class OracleStore {
     return eligibleHeroes(this.criteria);
   }
 
+  /**
+   * The heroes the next roll can actually produce — what the settings header
+   * counts.
+   *
+   * Not `eligible`, which is the strict filter. `poolFor` relaxes avoid-recent
+   * rather than starve a draw, so the header read "0 eligible" next to a button
+   * that drew somebody every time it was pressed. Built from the same call
+   * `openDraw` makes, which is what keeps an empty count and an empty stage the
+   * same condition rather than two that merely tend to agree.
+   */
+  get drawPool(): Hero[] {
+    return poolFor(this.squadSize, this.criteria);
+  }
+
   /** Roles actually present in the roster, in canonical order. */
   get availableRoles(): string[] {
-    return ROLE_ORDER.filter((role) => this.heroes.some((hero) => hero.role === role));
+    return availableRoles(this.heroes);
   }
 
   /** Role controls only appear once enrichment supplied roles, so the UI never
-      offers a filter that would silently empty the pool. */
+      offers a filter that would silently empty the pool. Delegated to the same
+      predicate the pool applies the filter behind, so the control on screen and
+      the rule in force cannot disagree. */
   get showRoleControls(): boolean {
-    return this.availableRoles.length > 1;
+    return roleFilterUsable(this.heroes);
   }
 
   get featuredHero(): Hero | null {
@@ -184,7 +200,7 @@ export class OracleStore {
       // did not make is the same wrong advice whether it is read or seen.
       case 'empty': return this.everyoneExcluded
         ? 'Every hero is excluded. Re-enable at least one to draw again.'
-        : 'No hero is eligible. Re-enable a hero or clear your exclusions.';
+        : 'No hero is eligible. Adjust your filters or re-enable a hero.';
       default: {
         if (!this.squad.length) return '';
         const names = this.squad.map((hero) => hero.name).join(', ');

@@ -66,11 +66,16 @@ function stageCopy(): { title: string; description: string; number: string } {
     case 'empty':
       // Excluding the entire roster is a different act from filtering the pool
       // down to nothing, and gets its own answer — see lib/eggs.
+      //
+      // The other branch has to cover both remaining causes at once: a
+      // complexity or role combination empties the pool with nothing excluded at
+      // all, and telling that user to clear exclusions they never made is advice
+      // that cannot work.
       return store.everyoneExcluded
         ? { title: NOBODY_LEFT_TITLE, description: NOBODY_LEFT_BODY, number: store.stageLabel }
         : {
           title: 'No hero left',
-          description: 'Re-enable a hero or clear your exclusions to restore the pool.',
+          description: 'Adjust your filters or re-enable a hero to restore the pool.',
           number: store.stageLabel,
         };
     default: {
