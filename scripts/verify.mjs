@@ -318,6 +318,41 @@ check('a pasted link IS labelled SHARED DRAW', recipient.shared && recipient.sta
 check('a shared draw is kept out of the tally', Object.keys(recipient.tally).length === 0);
 check('a shared draw is kept out of recents', recipient.recent.length === 0);
 
+// Deleting the hash out of the address bar fires hashchange with nothing left
+// to resolve. A shared draw's only claim on the screen is that link, so once it
+// is gone the stage must stop calling somebody else's pick a SHARED DRAW.
+location.hash = '';
+recipient.applySharedFromHash();
+check('clearing the hash retires the shared draw', recipient.shared === false, recipient.stageLabel);
+check('clearing the hash leaves a draw of our own on the stage',
+  recipient.mode === 'draw' && recipient.squad.length === 1, `${recipient.mode} ${squadIds(recipient)}`);
+check('the draw that replaces it is banked like any other', recipient.pickCount === 1, String(recipient.pickCount));
+check('the address bar names the new draw', location.hash === `#squad=${squadIds(recipient)}`, location.hash);
+
+// A hash naming heroes this roster does not have is NOT the same thing: the
+// link may work again once the roster catches up, so the stage is left alone.
+resetBrowser({ hash: '#squad=haze,lash', state: null });
+stubFetch(feed);
+const stranger = new OracleStore();
+await stranger.load();
+const strangerDraw = squadIds(stranger);
+location.hash = '#squad=nobody';
+stranger.applySharedFromHash();
+check('a hash naming unknown heroes leaves the stage as it was',
+  stranger.shared === true && squadIds(stranger) === strangerDraw, `${stranger.shared} ${squadIds(stranger)}`);
+
+// And clearing the hash on a draw of your own is not a request to redraw it.
+resetBrowser();
+stubFetch(feed);
+const mine = new OracleStore();
+await mine.load();
+const myDraw = squadIds(mine);
+const myCount = mine.pickCount;
+location.hash = '';
+mine.applySharedFromHash();
+check('clearing the hash on your own draw changes nothing',
+  squadIds(mine) === myDraw && mine.pickCount === myCount, `${squadIds(mine)} ${mine.pickCount}`);
+
 // A hostile share link. `#squad=%` is not a valid escape and browsers keep it
 // verbatim, so it reaches the parser as typed. Confirmed against the deployed
 // site: it left the stage on "Loading your next main" with the roster already

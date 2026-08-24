@@ -8,7 +8,7 @@ import {
   KONAMI, TAP_WINDOW_MS, advanceSequence, insistentLine, isImpatient, milestoneCrossed, milestoneLine,
   prophecy, secretFor,
 } from '../lib/eggs.ts';
-import { clearHash, copyToClipboard, hasUnresolvedShare, isOwnHash, readSharedDraw, writeHash } from '../lib/share.ts';
+import { clearHash, copyToClipboard, hasUnresolvedShare, isOwnHash, parseSquadHash, readSharedDraw, writeHash } from '../lib/share.ts';
 import { loadCachedRoster, loadState, saveCachedRoster, saveState } from '../lib/storage.ts';
 import type { Hero, RecentPick, StatusKind } from '../types.ts';
 
@@ -531,7 +531,19 @@ export class OracleStore {
    */
   applySharedFromHash(): void {
     const draw = readSharedDraw(this.byId);
-    if (draw.length) this.commitDraw(draw, { record: false, shared: !isOwnHash() });
+    if (draw.length) { this.commitDraw(draw, { record: false, shared: !isOwnHash() }); return; }
+    // Nothing resolved. Two different reasons for that, and only one of them is
+    // ours to act on:
+    //
+    //   the hash names heroes this roster has not heard of — leave the stage
+    //   alone, exactly as the load path does, because the link may work again
+    //   once the roster catches up;
+    //
+    //   the hash names no draw at all, because the user deleted it — a shared
+    //   draw's only claim on the screen was that link, so it stops being one and
+    //   the oracle draws its own. A draw of our own is left where it is: erasing
+    //   the permalink is not a request to reroll.
+    if (this.shared && parseSquadHash(location.hash).length === 0) this.roll();
   }
 
   /* ── User actions ── */
