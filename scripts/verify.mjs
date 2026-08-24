@@ -208,6 +208,34 @@ check('a squad round-trips through the hash',
 check('a hash without a squad yields nothing', parseSquadHash('#seed=4').length === 0);
 check('the hash is capped at a full squad', parseSquadHash(`#squad=${'a,b,c,d,e,f,g,h'}`).length === 6);
 
+// The address bar is untrusted input. A lone `%` is not a valid escape, and
+// Chrome keeps it verbatim in location.hash, so `#squad=%` reaches this parser
+// exactly as typed. It used to throw URIError from inside the roster load,
+// where it was swallowed as a feed failure and left the app on "Loading"
+// forever — a link anyone could send.
+let parseThrew = null;
+try { parseSquadHash('#squad=%'); } catch (error) { parseThrew = error; }
+check('a malformed escape never throws', parseThrew === null, String(parseThrew));
+check('a malformed escape is read as itself', JSON.stringify(parseSquadHash('#squad=%')) === '["%"]',
+  JSON.stringify(parseSquadHash('#squad=%')));
+check('a malformed escape mid-list keeps its neighbours',
+  JSON.stringify(parseSquadHash('#squad=haze,%E0%A4%A,lash')) === '["haze","%E0%A4%A","lash"]',
+  JSON.stringify(parseSquadHash('#squad=haze,%E0%A4%A,lash')));
+
+// Decoded once, not twice. `%2541` is the encoding of the literal id `%41`;
+// decoding it a second time silently turns it into `A` and resolves the link to
+// the wrong hero.
+check('an escape is decoded exactly once',
+  JSON.stringify(parseSquadHash('#squad=%2541')) === '["%41"]', JSON.stringify(parseSquadHash('#squad=%2541')));
+check('an id containing a separator survives the round trip',
+  JSON.stringify(parseSquadHash(`#squad=${squadToHash([hero({ id: 'a,b' }), hero({ id: 'c' })])}`)) === '["a,b","c"]',
+  JSON.stringify(parseSquadHash(`#squad=${squadToHash([hero({ id: 'a,b' }), hero({ id: 'c' })])}`)));
+check('empty segments are dropped rather than sought in the roster',
+  parseSquadHash('#squad=,,').length === 0);
+check('another parameter after squad is not swallowed',
+  JSON.stringify(parseSquadHash('#squad=haze&seed=4')) === '["haze"]',
+  JSON.stringify(parseSquadHash('#squad=haze&seed=4')));
+
 /* ── Telling your own hash from somebody else's ──
    Every roll writes the hash, so it doubles as a permalink for the current tab
    and the hash alone can no longer say who wrote it. A marker in history.state
@@ -289,6 +317,32 @@ check('a pasted link IS labelled SHARED DRAW', recipient.shared && recipient.sta
   recipient.stageLabel);
 check('a shared draw is kept out of the tally', Object.keys(recipient.tally).length === 0);
 check('a shared draw is kept out of recents', recipient.recent.length === 0);
+
+// A hostile share link. `#squad=%` is not a valid escape and browsers keep it
+// verbatim, so it reaches the parser as typed. Confirmed against the deployed
+// site: it left the stage on "Loading your next main" with the roster already
+// in hand, because the URIError surfaced inside adoptRoster and load()'s
+// per-source catch filed it as a dead feed. The second visit was worse — the
+// cache path throws before the try, so `fetching` stayed true and the refresh
+// button could never fire again.
+resetBrowser({ hash: '#squad=%', state: null });
+stubFetch(feed);
+const malformed = new OracleStore();
+await malformed.load();
+check('a malformed hash still loads the roster', malformed.heroes.length === rosterIds.length, String(malformed.heroes.length));
+check('a malformed hash still draws', malformed.mode === 'draw' && malformed.squad.length === 1, malformed.mode);
+check('a malformed hash leaves the store retryable', malformed.fetching === false);
+
+// Same link, second visit: this time there is a cached roster to prime from.
+resetBrowser({ hash: '#squad=%', state: null, keepStorage: true });
+stubFetch(feed);
+const malformedAgain = new OracleStore();
+let loadThrew = null;
+try { await malformedAgain.load(); } catch (error) { loadThrew = error; }
+check('a malformed hash does not reject the load', loadThrew === null, String(loadThrew));
+check('a malformed hash over a primed cache still draws',
+  malformedAgain.mode === 'draw' && malformedAgain.squad.length === 1, malformedAgain.mode);
+check('a malformed hash over a primed cache leaves the store retryable', malformedAgain.fetching === false);
 
 // The refresh button re-runs load() against a roster that is already on screen.
 resetBrowser();

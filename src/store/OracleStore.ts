@@ -285,13 +285,16 @@ export class OracleStore {
   async load(): Promise<void> {
     if (this.fetching) return;
     this.fetching = true;
-    // Only onto an empty screen: a manual refresh must not replace the roster
-    // already displayed with an older cached copy of it.
-    const primed = this.heroes.length ? null : this.primeFromCache();
-    this.setStatus(primed ? 'Cached roster — checking for updates…' : 'Syncing live roster…');
     const failed = new Set<string>();
     let lastError: unknown;
+    // Priming is inside the try so the finally always clears `fetching`. It used
+    // to sit outside, which meant one unexpected throw left the flag set and the
+    // guard above turned the refresh button into a no-op for good.
     try {
+      // Only onto an empty screen: a manual refresh must not replace the roster
+      // already displayed with an older cached copy of it.
+      const primed = this.heroes.length ? null : this.primeFromCache();
+      this.setStatus(primed ? 'Cached roster — checking for updates…' : 'Syncing live roster…');
       for (const source of SOURCES) {
         try {
           const heroes = await fetchRoster(source);

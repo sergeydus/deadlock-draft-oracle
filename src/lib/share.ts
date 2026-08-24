@@ -22,11 +22,42 @@ export function squadToHash(squad: readonly Hero[]): string {
   return squad.map((hero) => encodeURIComponent(hero.id)).join(',');
 }
 
+/**
+ * The still-encoded value of one `key=` in a hash, or null.
+ *
+ * Deliberately not `URLSearchParams`, which decodes the whole value before we
+ * can split it. Ids are encoded individually and joined with `,`, so decoding
+ * first turns the `%2C` protecting an id's own comma back into a separator and
+ * splits one hero into two. Splitting first and decoding after is the only
+ * order that round-trips.
+ */
+function rawParam(hash: string, key: string): string | null {
+  for (const pair of hash.replace(/^#/, '').split('&')) {
+    const at = pair.indexOf('=');
+    if (at !== -1 && pair.slice(0, at) === key) return pair.slice(at + 1);
+  }
+  return null;
+}
+
+/**
+ * `decodeURIComponent` that cannot throw.
+ *
+ * The address bar is untrusted input and a lone `%` is not a valid escape —
+ * browsers keep it verbatim, so `#squad=%` arrives here exactly as typed. This
+ * used to throw URIError from inside the roster load, where the per-source catch
+ * mistook it for a feed failure and left the app on "Loading" for good. A
+ * malformed escape now decodes to itself, finds no hero, and takes the ordinary
+ * "this link names nobody we know" path.
+ */
+function decodeOnce(value: string): string {
+  try { return decodeURIComponent(value); } catch { return value; }
+}
+
 /** Hero ids named by a `#squad=` value, in order. */
 export function parseSquadHash(hash: string): string[] {
-  const raw = new URLSearchParams(hash.replace(/^#/, '')).get('squad');
+  const raw = rawParam(hash, 'squad');
   if (!raw) return [];
-  return raw.split(',').slice(0, MAX_SQUAD).map((id) => decodeURIComponent(id));
+  return raw.split(',').slice(0, MAX_SQUAD).map(decodeOnce).filter(Boolean);
 }
 
 function currentMarker(): OwnHashMarker | null {
