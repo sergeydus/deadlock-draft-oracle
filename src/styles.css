@@ -645,7 +645,7 @@ kbd {
 }
 
 .empty-copy {
-  color: #77797d;
+  color: #85878b;
   font-size: 11px;
 }
 
@@ -706,9 +706,11 @@ kbd {
   text-align: right;
 }
 
+/* #737579 measured 3.99:1 against the tinted panel — under WCAG 1.4.3 for text
+   this size. The accessibility section of the suite does the sum now. */
 .source-note {
   margin: 21px 0 0;
-  color: #737579;
+  color: #85878b;
   font-size: 10px;
   line-height: 1.5;
 }
@@ -735,6 +737,9 @@ kbd {
 .search-box input {
   background: transparent;
   border: 0;
+  /* Suppressed so a mouse click does not draw a ring inside the box. The
+     keyboard ring is put back by the focus-visible block below — without it
+     there was no focus indicator here at all. */
   outline: 0;
   width: 120px;
   color: var(--ink);
@@ -894,7 +899,10 @@ kbd {
 .slot-main:focus-visible,
 .slot-reroll:focus-visible,
 .chip-group button:focus-visible,
-.micro-heading button:focus-visible {
+.micro-heading button:focus-visible,
+/* Outranks the `outline: 0` on .search-box input on specificity alone, so the
+   order of these two blocks does not matter. */
+.search-box input:focus-visible {
   outline: 2px solid var(--acid);
   outline-offset: 2px;
 }

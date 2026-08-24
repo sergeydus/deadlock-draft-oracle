@@ -1078,6 +1078,45 @@ const unstyled = [...styledClasses].filter((name) => !renderedTokens.has(name)).
 check('every class styles.css targets is still rendered', unstyled.length === 0,
   unstyled.length ? `no component produces: ${unstyled.map((n) => `.${n}`).join(', ')}` : `all ${styledClasses.size} classes`);
 
+/* ── Accessibility: focus and contrast ──
+   Two things a stylesheet can silently take away. The focus check is a
+   contract with the rule block in styles.css; the contrast check does the
+   sums, because "looks muted enough" is exactly how 3.77:1 shipped. */
+section('accessibility');
+
+// Every interactive element needs a visible focus indicator. The search input
+// suppresses its own outline so it sits flush in the box, and for a while
+// nothing put one back — a keyboard user tabbing in saw no change at all.
+const focusable = ['.icon-button', '.primary-button', '.secondary-button', '.hero-card', '.search-box input'];
+const unfocused = focusable.filter((selector) => !bareCss.includes(selector + ':focus-visible'));
+check('every focusable control has a focus-visible ring', unfocused.length === 0, unfocused.join(', '));
+
+// WCAG 1.4.3 for normal-size text. The panel tints itself with black at 12%
+// over the shell gradient, so these are the composited backgrounds, not the
+// gradient stops.
+const luminance = (hex) => {
+  const channels = [1, 3, 5]
+    .map((at) => parseInt(hex.slice(at, at + 2), 16) / 255)
+    .map((value) => (value <= 0.03928 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4));
+  return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
+};
+const contrast = (fg, bg) => {
+  const [light, dark] = [luminance(fg), luminance(bg)].sort((a, b) => b - a);
+  return (light + 0.05) / (dark + 0.05);
+};
+const colourOf = (selector) => {
+  const block = bareCss.slice(bareCss.indexOf(selector + ' {'));
+  const declaration = block.slice(0, block.indexOf('}')).split('color:')[1] ?? '';
+  return declaration.split(';')[0].trim().toLowerCase();
+};
+// The darkest and lightest ground any of this text sits on.
+const grounds = ['#101217', '#12141a'];
+for (const selector of ['.source-note', '.empty-copy', '.recent-chip']) {
+  const colour = colourOf(selector);
+  const worst = Math.min(...grounds.map((ground) => contrast(colour, ground)));
+  check(`${selector} clears 4.5:1 against the panel`, worst >= 4.5, `${colour} at ${worst.toFixed(2)}:1`);
+}
+
 /* ── Social metadata ──
    Every share link used to unfurl as a bare URL. The card assets live in
    public/ and are copied verbatim, so nothing else validates them: this checks
