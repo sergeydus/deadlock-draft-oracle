@@ -346,17 +346,70 @@ check('clearing the hash leaves a draw of our own on the stage',
 check('the draw that replaces it is banked like any other', recipient.pickCount === 1, String(recipient.pickCount));
 check('the address bar names the new draw', location.hash === `#squad=${squadIds(recipient)}`, location.hash);
 
-// A hash naming heroes this roster does not have is NOT the same thing: the
-// link may work again once the roster catches up, so the stage is left alone.
+// A hash naming heroes this roster cannot resolve is the harder case, and the
+// app already had an answer for it on the load path — hashchange just was not
+// using it. Whether the link may still be good depends on the roster's
+// confidence, but `shared` must go either way: the stage cannot keep presenting
+// the previous pick as the draw a different URL describes. It used to, and
+// copyLink then copied the dead hash instead of the heroes on screen.
 resetBrowser({ hash: '#squad=haze,lash', state: null });
 stubFetch(feed);
-const stranger = new OracleStore();
-await stranger.load();
-const strangerDraw = squadIds(stranger);
+const liveDeadLink = new OracleStore();
+await liveDeadLink.load();
+const wasShowing = squadIds(liveDeadLink);
 location.hash = '#squad=nobody';
-stranger.applySharedFromHash();
-check('a hash naming unknown heroes leaves the stage as it was',
-  stranger.shared === true && squadIds(stranger) === strangerDraw, `${stranger.shared} ${squadIds(stranger)}`);
+liveDeadLink.applySharedFromHash();
+check('a live roster stops calling the old pick a shared draw', liveDeadLink.shared === false, liveDeadLink.stageLabel);
+check('a live roster is entitled to replace a dead hash',
+  location.hash === `#squad=${squadIds(liveDeadLink)}`, location.hash);
+check('and it draws rather than keeping what the old link named',
+  squadIds(liveDeadLink) !== wasShowing || liveDeadLink.pickCount === 1,
+  `${wasShowing} -> ${squadIds(liveDeadLink)}`);
+await liveDeadLink.copyLink();
+check('copyLink copies the draw on screen, not the dead hash',
+  location.href.endsWith(`#squad=${squadIds(liveDeadLink)}`), location.href);
+
+// Same hash, but the roster came from the cache because every feed was down.
+// That roster is not entitled to call the link dead — it may simply predate the
+// hero — so the address bar survives and the fallback draw is not banked over
+// it. `shared` still goes: the stage is showing its own pick now.
+resetBrowser();
+stubFetch(feed);
+const seeding = new OracleStore();
+await seeding.load();
+const cachedRoster = storage.get('draftOracle_v1_roster');
+
+resetBrowser({ hash: '#squad=haze,lash', state: null });
+storage.set('draftOracle_v1_roster', cachedRoster);
+stubFetch('fail');
+const offlineLink = await quietly(async () => {
+  const store = new OracleStore();
+  await store.load();
+  return store;
+});
+check('a cached roster still restores the senderuFFFDs draw', offlineLink.shared === true, offlineLink.stageLabel);
+location.hash = '#squad=nobody';
+offlineLink.applySharedFromHash();
+check('a cached roster also stops claiming the old draw', offlineLink.shared === false, offlineLink.stageLabel);
+check('but it leaves the unresolved link in the address bar',
+  location.hash === '#squad=nobody', location.hash);
+check('and does not bank a draw over it', offlineLink.pickCount === 0, String(offlineLink.pickCount));
+
+// The invariant behind all of the above, swept over every shape a hash can
+// change into. The stage may call a draw SHARED only while the address bar
+// actually names that draw — which is exactly what the old unknown-hash
+// behaviour broke, and it is cheaper to state once than to re-derive per case.
+for (const next of ['', '#squad=nobody', '#squad=haze', '#seed=4', '#squad=%']) {
+  resetBrowser({ hash: '#squad=haze,lash', state: null });
+  stubFetch(feed);
+  const tab = new OracleStore();
+  await tab.load();
+  location.hash = next;
+  tab.applySharedFromHash();
+  check(`shared implies the hash names the stage — after "${next}"`,
+    !tab.shared || location.hash === `#squad=${squadIds(tab)}`,
+    `shared=${tab.shared} hash="${location.hash}" stage=${squadIds(tab)}`);
+}
 
 // And clearing the hash on a draw of your own is not a request to redraw it.
 resetBrowser();

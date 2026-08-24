@@ -135,6 +135,15 @@ best-effort: if it fails you lose a filter and a colour, never the roster.
   `share.ts` may throw on a hash a user can type. Do not reintroduce
   `URLSearchParams` there either: it decodes before the split, which turns the
   `%2C` protecting an id's own comma back into a separator.
+- **`shared` is a claim about the address bar.** The stage may label a draw
+  `SHARED DRAW` only while the hash names *that* draw. A hashchange resolving to
+  nothing therefore has to retire the claim whatever it decides about the URL
+  itself — otherwise `copyLink()`, which deliberately does not rewrite the hash
+  for a received draw, hands out a link to heroes the stage is not showing.
+  `applySharedFromHash` reuses `adoptRoster`'s `stranded` rule rather than
+  inventing its own, so a live roster replaces a dead hash and a cached one
+  leaves it for a reconnect, on both paths alike. The suite sweeps the invariant
+  over every shape a hash can change into.
 - **`eligible` is not the draw pool.** `eligibleHeroes()` is the strict filter;
   `poolFor()` relaxes avoid-recent rather than starve a draw. Anything the user
   reads about "how many can be drawn" — the settings count, the empty stage —

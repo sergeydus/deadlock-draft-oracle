@@ -8,7 +8,7 @@ import {
   KONAMI, TAP_WINDOW_MS, advanceSequence, insistentLine, isImpatient, milestoneCrossed, milestoneLine,
   prophecy, secretFor,
 } from '../lib/eggs.ts';
-import { clearHash, copyToClipboard, hasUnresolvedShare, isOwnHash, parseSquadHash, readSharedDraw, writeHash } from '../lib/share.ts';
+import { clearHash, copyToClipboard, hasUnresolvedShare, isOwnHash, readSharedDraw, writeHash } from '../lib/share.ts';
 import { loadCachedRoster, loadState, saveCachedRoster, saveState } from '../lib/storage.ts';
 import type { Hero, RecentPick, StatusKind } from '../types.ts';
 
@@ -64,6 +64,9 @@ export class OracleStore {
   statusKind: StatusKind = '';
   /** True when the current draw came from a #squad= link rather than a roll. */
   shared = false;
+  /** How much the roster on screen is trusted — see `adoptRoster`. Remembered
+      because a hashchange has to make the same judgement afterwards. */
+  confidence: RosterConfidence = 'provisional';
   seed = 0;
   mode: StageMode = 'loading';
   /** Bumped on every draw. The stage keys its heading on this so the reveal
@@ -386,6 +389,7 @@ export class OracleStore {
   private adoptRoster(heroes: Hero[], sourceName: string, confidence: RosterConfidence = 'live'): void {
     this.heroes = heroes;
     this.source = sourceName;
+    this.confidence = confidence;
     const byId = this.byId;
     const authoritative = confidence !== 'provisional';
     if (authoritative) {
@@ -398,10 +402,7 @@ export class OracleStore {
     const wasProvisional = this.provisional;
     this.provisional = !authoritative;
 
-    // A link this roster cannot read is not necessarily a dead link — it may
-    // simply predate the roster. Leave the address bar alone and do not bank a
-    // fallback draw over it, so reconnecting still recovers the sender's draw.
-    const stranded = confidence !== 'live' && hasUnresolvedShare(byId);
+    const stranded = this.stranded;
 
     // A shared link wins over a fresh roll so the recipient sees the sender's draw.
     // Every roll writes the hash as well, so the marker is what separates a link
@@ -414,6 +415,19 @@ export class OracleStore {
     else if (!this.squad.length) this.openDraw(authoritative && !stranded);
     // The provisional pick survived into a confirmed roster, so it counts now.
     else if (authoritative && wasProvisional && !this.shared && !stranded) this.bankDraw(this.squad);
+  }
+
+  /**
+   * A share link this roster cannot read, that it is also not entitled to
+   * declare dead.
+   *
+   * Only a live roster has standing to say a hero does not exist; a provisional
+   * or cached one may simply predate them. While stranded, the address bar is
+   * left alone and no fallback draw is banked over it, so reconnecting still
+   * recovers the sender's draw.
+   */
+  private get stranded(): boolean {
+    return this.confidence !== 'live' && hasUnresolvedShare(this.byId);
   }
 
   private setStatus(message: string, kind: StatusKind = ''): void {
@@ -560,18 +574,18 @@ export class OracleStore {
   applySharedFromHash(): void {
     const draw = readSharedDraw(this.byId);
     if (draw.length) { this.commitDraw(draw, { record: false, shared: !isOwnHash() }); return; }
-    // Nothing resolved. Two different reasons for that, and only one of them is
-    // ours to act on:
-    //
-    //   the hash names heroes this roster has not heard of — leave the stage
-    //   alone, exactly as the load path does, because the link may work again
-    //   once the roster catches up;
-    //
-    //   the hash names no draw at all, because the user deleted it — a shared
-    //   draw's only claim on the screen was that link, so it stops being one and
-    //   the oracle draws its own. A draw of our own is left where it is: erasing
-    //   the permalink is not a request to reroll.
-    if (this.shared && parseSquadHash(location.hash).length === 0) this.roll();
+    // Nothing resolved, so the address bar no longer describes the stage. A draw
+    // of our own makes no claim about the hash — erasing or editing the
+    // permalink is not a request to reroll — so only a shared draw has to answer
+    // for this.
+    if (!this.shared) return;
+    // Its only claim on the screen was a link that is now gone or unreadable,
+    // and keeping the SHARED DRAW label past that point is what made copyLink
+    // hand out a hash naming heroes the stage was not showing. Draw our own,
+    // under exactly the rule a fresh load with this hash would use, so the two
+    // paths cannot disagree: a live roster replaces a dead hash, and anything
+    // less leaves it for a reconnect.
+    this.openDraw(this.confidence !== 'provisional' && !this.stranded);
   }
 
   /* ── User actions ── */
