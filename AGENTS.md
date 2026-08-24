@@ -135,6 +135,16 @@ best-effort: if it fails you lose a filter and a colour, never the roster.
   `share.ts` may throw on a hash a user can type. Do not reintroduce
   `URLSearchParams` there either: it decodes before the split, which turns the
   `%2C` protecting an id's own comma back into a separator.
+- **Roster confidence does not tell you whether a draw was banked.** The
+  `RosterConfidence` type and the store's private `provisional` field answer
+  different questions: how much the *roster* is trusted, and whether the *draw*
+  on screen still owes a tally entry. Both `provisional` and `cached` rosters can
+  leave an unbanked draw behind — the second when a share link is stranded — so
+  deriving one from the other leaves a reconnect showing an unrecorded `PICK 00`
+  under a hash naming a different hero. Only the code that decided not to bank
+  knows, which is why `openDraw` sets the flag and `bankDraw` clears it. A draw
+  restored from the address bar is never one of these: it was banked when it was
+  rolled, or it belongs to whoever sent the link.
 - **`shared` is a claim about the address bar.** The stage may label a draw
   `SHARED DRAW` only while the hash names *that* draw. A hashchange resolving to
   nothing therefore has to retire the claim whatever it decides about the URL

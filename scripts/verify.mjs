@@ -395,6 +395,53 @@ check('but it leaves the unresolved link in the address bar',
   location.hash === '#squad=nobody', location.hash);
 check('and does not bank a draw over it', offlineLink.pickCount === 0, String(offlineLink.pickCount));
 
+// The handover. An unbanked fallback drawn over an unresolved link has to be
+// finished once a feed confirms the roster — banked, with the dead hash
+// replaced — or the app ends up claiming a live roster while showing an
+// unrecorded PICK 00 whose address names a different hero. Two routes reach that
+// state: this one, and a cold load with the same hash and no hashchange at all.
+stubFetch(feed);
+await offlineLink.load();
+check('reconnecting banks the fallback drawn over a dead link',
+  offlineLink.pickCount === 1, `picks=${offlineLink.pickCount}`);
+check('reconnecting replaces the hash the fallback was drawn over',
+  location.hash === `#squad=${squadIds(offlineLink)}`, location.hash);
+check('and the roster is live afterwards', offlineLink.confidence === 'live', offlineLink.confidence);
+
+// The same handover without any hashchange: the link was already unresolvable
+// when the cached roster loaded.
+resetBrowser({ hash: '#squad=nobody', state: null });
+storage.set('draftOracle_v1_roster', cachedRoster);
+stubFetch('fail');
+const coldStranded = await quietly(async () => {
+  const store = new OracleStore();
+  await store.load();
+  return store;
+});
+check('a cold cached load draws over an unresolvable link without banking',
+  coldStranded.pickCount === 0 && coldStranded.squad.length === 1 && location.hash === '#squad=nobody',
+  `picks=${coldStranded.pickCount} hash=${location.hash}`);
+stubFetch(feed);
+await coldStranded.load();
+check('reconnecting finishes that draw too',
+  coldStranded.pickCount === 1 && location.hash === `#squad=${squadIds(coldStranded)}`,
+  `picks=${coldStranded.pickCount} hash=${location.hash}`);
+
+// A draw restored from the address bar is not a fallback and must never be
+// banked later — it was already counted when it was rolled. Retyping your own
+// hash goes through the same commit, so this is the case that keeps the
+// "unbanked" flag honest rather than merely correct on the paths above.
+resetBrowser();
+stubFetch(feed);
+const retyped = new OracleStore();
+await retyped.load();
+const retypedHash = location.hash;
+const retypedCount = retyped.pickCount;
+retyped.applySharedFromHash();
+await retyped.load();
+check('retyping your own hash never double-counts the draw',
+  retyped.pickCount === retypedCount, `${retypedCount} -> ${retyped.pickCount} at ${retypedHash}`);
+
 // The invariant behind all of the above, swept over every shape a hash can
 // change into. The stage may call a draw SHARED only while the address bar
 // actually names that draw — which is exactly what the old unknown-hash

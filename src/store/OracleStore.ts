@@ -21,6 +21,12 @@ import type { Hero, RecentPick, StatusKind } from '../types.ts';
  *   still not a complete picture of upstream.
  * `live` — a feed answered. The only state entitled to conclude that a hero a
  *   share link names no longer exists.
+ *
+ * This says nothing about whether the draw on screen has been banked. Both
+ * `provisional` and `cached` can leave an unbanked one behind, so that is
+ * tracked separately by the `provisional` *field* — different question, and
+ * conflating the two is how a reconnect came to leave an unrecorded draw under a
+ * dead hash.
  */
 type RosterConfidence = 'provisional' | 'cached' | 'live';
 
@@ -81,10 +87,20 @@ export class OracleStore {
   streakCount = 0;
 
   /**
-   * True while the roster on screen came from the cache and no feed has
-   * confirmed it. A provisional roster must do nothing irreversible: the cache
-   * can be a release behind, so pruning saved state against it deletes real
-   * data, and a draw from it may name a hero that no longer exists.
+   * True while the draw on screen is one *this app produced* and deliberately
+   * did not bank — because the roster behind it was only cached, or because it
+   * was drawn over a share link that roster had no standing to call dead.
+   * Confirming a roster finishes such a draw: banks it, and replaces the hash.
+   *
+   * It tracks the draw, not the roster. It used to be assigned from confidence
+   * (`!authoritative`), and a *cached* adopt therefore cleared it while
+   * `openDraw(false)` had just left the draw unbanked — so reconnecting never
+   * finished the job. `confidence` alone cannot answer this; only the code that
+   * decided not to bank knows.
+   *
+   * A draw restored from the address bar is not one of these. It was banked when
+   * it was rolled, or it belongs to whoever sent the link, so nothing here may
+   * ever count it again.
    */
   private provisional = false;
   /* Egg bookkeeping. None of it is observable: nothing renders from these, and
@@ -400,7 +416,6 @@ export class OracleStore {
     this.squad = this.squad.map((hero) => byId.get(hero.id)).filter((hero): hero is Hero => hero !== undefined);
 
     const wasProvisional = this.provisional;
-    this.provisional = !authoritative;
 
     const stranded = this.stranded;
 
@@ -480,6 +495,7 @@ export class OracleStore {
 
   /** Tally, recents and the address bar — the irreversible half of a draw. */
   private bankDraw(heroes: Hero[]): void {
+    this.provisional = false;
     this.recordDraw(heroes);
     this.noteStreak(heroes);
     this.persist();
@@ -521,11 +537,13 @@ export class OracleStore {
       return;
     }
     this.commitDraw(drawSquad(pool, this.squadSize, { coverRoles: this.coverRoles, rng: this.rng }), { record });
+    // Set here rather than from the roster's confidence: this is the one place
+    // that knows a draw was produced and left unbanked. `bankDraw` clears it.
+    this.provisional = !record;
   }
 
   /** The roll button. A draw the user asked for is always real. */
   roll(): void {
-    this.provisional = false;
     // Space stays live on an empty stage, so a roll that cannot draw anything
     // must not count: being told to be patient after producing nothing is just
     // wrong. Checked against the same pool openDraw is about to build.
