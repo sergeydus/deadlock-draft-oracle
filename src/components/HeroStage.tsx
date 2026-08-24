@@ -10,8 +10,12 @@ import { SquadStrip } from './SquadStrip.tsx';
  * Decode the portrait off-screen and only swap it in once ready, so a reveal
  * never flashes an empty frame. The effect cleanup is what stops a slow image
  * from an earlier roll landing after a newer one.
+ *
+ * The one component here that is not an `observer`: it reads no observable, only
+ * the url its parent hands it. Wrapping it would add a reaction with nothing to
+ * react to.
  */
-const StageArt = observer(function StageArt({ url }: { url: string }) {
+function StageArt({ url }: { url: string }) {
   const [ready, setReady] = useState('');
 
   useEffect(() => {
@@ -32,7 +36,7 @@ const StageArt = observer(function StageArt({ url }: { url: string }) {
       style={{ backgroundImage: ready ? cssUrl(ready) : undefined, opacity: ready ? 0.55 : 0.1 }}
     />
   );
-});
+}
 
 /** Role / weapon / complexity, whichever of them the feeds actually supplied. */
 const HeroTags = observer(function HeroTags() {
@@ -137,9 +141,10 @@ export const HeroStage = observer(function HeroStage() {
         </button>
       </div>
       <p className="shortcut">Press <kbd>Space</kbd> to reroll</p>
-      {/* The one live region in the app. The heading cannot be it: it is keyed
-          on the draw, so it is replaced rather than updated, and a screen
-          reader is told nothing. */}
+      {/* The stage's live region. The heading cannot be it: it is keyed on the
+          draw, so it is replaced rather than updated, and a screen reader is
+          told nothing. Three others exist — the roster count, the toast and the
+          source status — each scoped to the panel it belongs to. */}
       <p className="visually-hidden" role="status" aria-live="polite">{store.announcement}</p>
     </section>
   );

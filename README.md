@@ -13,8 +13,8 @@ or a whole six-stack.
   the second is merged into the first in the background.
 - **Squad draws** — pick 1 to 6 heroes at once, never a duplicate, with a per-slot
   reroll so you can redraw one teammate without disturbing the rest.
-- **Role coverage** — squad draws can guarantee one hero of each role before
-  filling the remaining slots.
+- **Role coverage** — squad draws take one hero of each role first, then fill
+  the remaining slots, so a squad is as role-diverse as its size allows.
 - **Filters** — by complexity (the game's own 1–4 rating) and role
   (marksman / assassin / mystic / brawler). Exclude any hero by clicking its card,
   hide unreleased/test characters, and keep your last five picks out of the pool.

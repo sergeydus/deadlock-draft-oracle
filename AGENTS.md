@@ -37,7 +37,7 @@ that mentions no version at all.
 | `src/store/OracleStore.ts` | **All application state.** One MobX class; a singleton `store` is imported directly by components. |
 | `src/lib/` | Logic with no store import and no mutable application state. A pure core — `feed` (parsing), `pool` (filters), `random` (seeded draws), `css`, and `roster`’s parse/merge half — and a browser edge: `share` (URL + clipboard), `storage` (localStorage), `roster`’s fetching. |
 | `src/lib/eggs.ts` | **Every easter egg**, as pure rules and copy. See *Easter eggs* below — spoilers. |
-| `src/components/` | Presentation only. Every component is an `observer`. |
+| `src/components/` | Presentation only. Most components are `observer`s; `Controls.tsx` holds plain presentational pieces (`ChipGroup`, `FilterRow`, `ToggleRow`) and `StageArt` reads only its props, so neither needs one. |
 | `src/styles.css` | **Plain global stylesheet, not CSS Modules.** See below. |
 | `public/` | Favicon, touch icon, the `og.png` share card and `sw.js`. Copied into `dist/` verbatim. |
 | `public/sw.js` | The offline shell. Plain JS on purpose — `public/` is not compiled. |
@@ -123,8 +123,27 @@ best-effort: if it fails you lose a filter and a colour, never the roster.
   enrichment, so a filter persisted from a healthy session would match nothing on
   a session where enrichment failed — and the chips are hidden then, leaving no way
   to clear it. `eligibleHeroes()` therefore ignores the role filter unless
-  `hasRoleData()` is true. Any future filter fed by enrichment-only data needs the
-  same guard.
+  `roleFilterUsable()` is true, and `store.showRoleControls` delegates to the same
+  function so the control on screen and the rule in force cannot drift. It wants
+  **two** distinct roles, not one: a partial merge that turned up a single role
+  used to be enough to apply the filter while still being too few for the chips.
+  Any future filter fed by enrichment-only data needs the same guard.
+- **The address bar is untrusted input.** `#squad=%` is not a valid escape and
+  browsers keep it verbatim, so it reaches `parseSquadHash` as typed. It used to
+  throw `URIError` from inside `adoptRoster`, where `load()`'s per-source catch
+  filed it as a dead feed and left the app on "Loading" for good. Nothing in
+  `share.ts` may throw on a hash a user can type. Do not reintroduce
+  `URLSearchParams` there either: it decodes before the split, which turns the
+  `%2C` protecting an id's own comma back into a separator.
+- **`eligible` is not the draw pool.** `eligibleHeroes()` is the strict filter;
+  `poolFor()` relaxes avoid-recent rather than starve a draw. Anything the user
+  reads about "how many can be drawn" — the settings count, the empty stage —
+  must come from `store.drawPool`, or the screen says 0 next to a button that
+  draws.
+- **An empty pool has more than one cause.** Excluding the whole roster, and a
+  complexity or role combination that matches nobody, are different acts. Copy
+  that names only exclusions is wrong advice for the second, which reaches
+  `mode === 'empty'` with `excluded.size === 0`.
 - **Role data has upstream gaps.** Familiar has never carried a `hero_type`, and a
   hero with `role: ''` is unreachable while a role filter is active — intended
   (filtering to "marksman" must not return an unclassified hero). `npm test` fails
@@ -190,8 +209,8 @@ best-effort: if it fails you lose a filter and a colour, never the roster.
   read only once every source had exhausted `FETCH_TIMEOUT_MS` — measured at 16s
   of "Loading" with a complete roster already in `localStorage`. Two
   consequences. The live feed arriving means `adoptRoster()` runs a *second*
-  time, so it takes an `authoritative` flag: a **provisional** roster does
-  nothing irreversible. It does not prune saved ids — the cache can predate a
+  time, so it takes a `RosterConfidence` — `provisional`, `cached` or `live`. A
+  **provisional** roster does nothing irreversible. It does not prune saved ids — the cache can predate a
   hero, and pruning against it deletes that hero’s exclusion for good — and it
   does not bank its opening draw, which may name someone the live roster no
   longer has. Both happen when a feed confirms the roster, or when every feed
@@ -382,6 +401,10 @@ none, which is the point of it:
     between builds, so the worker is not reinstalled — it picks the new build up
     through a navigation, which is the path worth eyeballing by hand until the
     browser E2E is committed.
+11. Tab through the page from the address bar. Every control takes a visible
+    acid ring, the search box included — it suppresses its own outline, so it is
+    the one that regresses silently. The suite checks the rule exists; only this
+    checks it is actually painted.
 
 ## Shipping it
 

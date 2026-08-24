@@ -112,6 +112,18 @@ export class OracleStore {
     return new Map(this.heroes.map((hero) => [hero.id, hero]));
   }
 
+  /**
+   * The feed behind the roster on screen — where "View source" points.
+   *
+   * `source` carries a " (cached)" suffix while a primed roster is still
+   * provisional; the link should name the feed either way. Falls back to the
+   * first source, which is what an unlabelled roster came from.
+   */
+  get sourceUrl(): string {
+    const name = this.source.replace(' (cached)', '');
+    return (SOURCES.find((source) => source.name === name) ?? SOURCES[0]).url;
+  }
+
   private get criteria(): PoolCriteria {
     return {
       heroes: this.heroes,
