@@ -142,8 +142,13 @@ best-effort: if it fails you lose a filter and a colour, never the roster.
   leave an unbanked draw behind — the second when a share link is stranded — so
   deriving one from the other leaves a reconnect showing an unrecorded `PICK 00`
   under a hash naming a different hero. Only the code that decided not to bank
-  knows, which is why `openDraw` sets the flag and `bankDraw` clears it. A draw
-  restored from the address bar is never one of these: it was banked when it was
+  knows, which is why `openDraw` raises the flag. Clearing it takes the other
+  half: `commitDraw` clears it for *whatever* draw it puts on screen, because the
+  flag describes that draw and nothing else. Raising it in one place is not
+  enough — a draw restored from the address bar would inherit a fallback's flag
+  and be banked a second time, which is reachable by hand, since editing a hash
+  creates a history entry and Back returns to one this tab wrote with its marker
+  intact. A restored draw is never owed a tally entry: it was banked when it was
   rolled, or it belongs to whoever sent the link.
 - **`shared` is a claim about the address bar.** The stage may label a draw
   `SHARED DRAW` only while the hash names *that* draw. A hashchange resolving to

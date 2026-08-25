@@ -442,6 +442,44 @@ await retyped.load();
 check('retyping your own hash never double-counts the draw',
   retyped.pickCount === retypedCount, `${retypedCount} -> ${retyped.pickCount} at ${retypedHash}`);
 
+// The flag describes the draw on screen, so anything that replaces that draw has
+// to clear it. Setting it only in openDraw stops a restored draw from raising
+// the flag, but not from inheriting one: a fallback leaves it true, and the next
+// hash that resolves inherits it and gets banked a second time on reconnect.
+//
+// Reachable by hand — editing a hash creates a history entry, so Back returns to
+// the entry this tab wrote, marker intact, and isOwnHash() is true again.
+resetBrowser();
+storage.set('draftOracle_v1_roster', cachedRoster);
+stubFetch('fail');
+const staleFlag = await quietly(async () => {
+  const store = new OracleStore();
+  await store.load();
+  return store;
+});
+staleFlag.roll();                                  // our own draw, banked, marker written
+const staleOwnHash = location.hash;
+const staleOwnState = JSON.parse(JSON.stringify(history.state));
+const staleBanked = staleFlag.pickCount;
+
+location.hash = '#squad=haze,lash';                // a link somebody sent
+staleFlag.applySharedFromHash();
+location.hash = '#squad=nobody';                   // edited to something the cache cannot read
+staleFlag.applySharedFromHash();
+check('the fallback is the one draw still owing a tally entry',
+  staleFlag.pickCount === staleBanked, `picks=${staleFlag.pickCount}`);
+
+location.hash = staleOwnHash;                      // Back, onto the entry this tab wrote
+history.state = staleOwnState;
+staleFlag.applySharedFromHash();
+check('going back to your own hash restores that draw',
+  location.hash === `#squad=${squadIds(staleFlag)}`, `${location.hash} vs ${squadIds(staleFlag)}`);
+
+stubFetch(feed);
+await staleFlag.load();
+check('and reconnecting does not bank the draw it replaced the fallback with',
+  staleFlag.pickCount === staleBanked, `${staleBanked} -> ${staleFlag.pickCount}`);
+
 // The invariant behind all of the above, swept over every shape a hash can
 // change into. The stage may call a draw SHARED only while the address bar
 // actually names that draw — which is exactly what the old unknown-hash

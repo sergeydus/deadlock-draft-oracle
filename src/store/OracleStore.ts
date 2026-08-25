@@ -100,7 +100,10 @@ export class OracleStore {
    *
    * A draw restored from the address bar is not one of these. It was banked when
    * it was rolled, or it belongs to whoever sent the link, so nothing here may
-   * ever count it again.
+   * ever count it again. That takes both halves: `commitDraw` clears the flag for
+   * whatever draw it puts on screen, and `openDraw` raises it again only for a
+   * draw it produced and did not bank. Raising it in one place is not enough —
+   * a restored draw would inherit a fallback's flag and be banked a second time.
    */
   private provisional = false;
   /* Egg bookkeeping. None of it is observable: nothing renders from these, and
@@ -490,6 +493,12 @@ export class OracleStore {
     this.shared = shared;
     this.mode = 'draw';
     this.drawId++;
+    // Whatever was on screen is gone, and so is any debt it carried. A draw
+    // restored from the address bar arrives here and must land on `false`: it
+    // was banked when it was rolled, or it belongs to whoever sent the link.
+    // `openDraw` raises the flag again straight after this call when the draw it
+    // just produced was deliberately not banked.
+    this.provisional = false;
     if (record) this.bankDraw(heroes);
   }
 
