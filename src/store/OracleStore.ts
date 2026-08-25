@@ -1,7 +1,7 @@
 import { makeAutoObservable, runInAction } from 'mobx';
-import { COMPLEXITY_LEVELS, RECENT_LIMIT, ROLE_ORDER, SOURCES, TALLY_ROWS } from '../constants.ts';
+import { COMPLEXITY_LEVELS, RECENT_LIMIT, SOURCES, TALLY_ROWS } from '../constants.ts';
 import { drawFrom, drawSquad, mulberry32, randomSeed, type Rng } from '../lib/random.ts';
-import { eligibleHeroes, poolFor, type PoolCriteria } from '../lib/pool.ts';
+import { availableRoles, eligibleHeroes, poolFor, roleFilterUsable, type PoolCriteria } from '../lib/pool.ts';
 import { fetchEnrichment, fetchRoster, mergeInto } from '../lib/roster.ts';
 import {
   ARCANE_OFF, ARCANE_ON, EYEBROW_TAPS, IMPATIENT_LINE, IMPATIENT_WINDOW_MS, INSISTENT_AT, INVOCATION,
@@ -21,6 +21,12 @@ import type { Hero, RecentPick, StatusKind } from '../types.ts';
  *   still not a complete picture of upstream.
  * `live` — a feed answered. The only state entitled to conclude that a hero a
  *   share link names no longer exists.
+ *
+ * This says nothing about whether the draw on screen has been banked. Both
+ * `provisional` and `cached` can leave an unbanked one behind, so that is
+ * tracked separately by the `provisional` *field* — different question, and
+ * conflating the two is how a reconnect came to leave an unrecorded draw under a
+ * dead hash.
  */
 type RosterConfidence = 'provisional' | 'cached' | 'live';
 
@@ -64,6 +70,9 @@ export class OracleStore {
   statusKind: StatusKind = '';
   /** True when the current draw came from a #squad= link rather than a roll. */
   shared = false;
+  /** How much the roster on screen is trusted — see `adoptRoster`. Remembered
+      because a hashchange has to make the same judgement afterwards. */
+  confidence: RosterConfidence = 'provisional';
   seed = 0;
   mode: StageMode = 'loading';
   /** Bumped on every draw. The stage keys its heading on this so the reveal
@@ -78,10 +87,23 @@ export class OracleStore {
   streakCount = 0;
 
   /**
-   * True while the roster on screen came from the cache and no feed has
-   * confirmed it. A provisional roster must do nothing irreversible: the cache
-   * can be a release behind, so pruning saved state against it deletes real
-   * data, and a draw from it may name a hero that no longer exists.
+   * True while the draw on screen is one *this app produced* and deliberately
+   * did not bank — because the roster behind it was only cached, or because it
+   * was drawn over a share link that roster had no standing to call dead.
+   * Confirming a roster finishes such a draw: banks it, and replaces the hash.
+   *
+   * It tracks the draw, not the roster. It used to be assigned from confidence
+   * (`!authoritative`), and a *cached* adopt therefore cleared it while
+   * `openDraw(false)` had just left the draw unbanked — so reconnecting never
+   * finished the job. `confidence` alone cannot answer this; only the code that
+   * decided not to bank knows.
+   *
+   * A draw restored from the address bar is not one of these. It was banked when
+   * it was rolled, or it belongs to whoever sent the link, so nothing here may
+   * ever count it again. That takes both halves: `commitDraw` clears the flag for
+   * whatever draw it puts on screen, and `openDraw` raises it again only for a
+   * draw it produced and did not bank. Raising it in one place is not enough —
+   * a restored draw would inherit a fallback's flag and be banked a second time.
    */
   private provisional = false;
   /* Egg bookkeeping. None of it is observable: nothing renders from these, and
@@ -112,6 +134,18 @@ export class OracleStore {
     return new Map(this.heroes.map((hero) => [hero.id, hero]));
   }
 
+  /**
+   * The feed behind the roster on screen — where "View source" points.
+   *
+   * `source` carries a " (cached)" suffix while a primed roster is still
+   * provisional; the link should name the feed either way. Falls back to the
+   * first source, which is what an unlabelled roster came from.
+   */
+  get sourceUrl(): string {
+    const name = this.source.replace(' (cached)', '');
+    return (SOURCES.find((source) => source.name === name) ?? SOURCES[0]).url;
+  }
+
   private get criteria(): PoolCriteria {
     return {
       heroes: this.heroes,
@@ -128,15 +162,31 @@ export class OracleStore {
     return eligibleHeroes(this.criteria);
   }
 
+  /**
+   * The heroes the next roll can actually produce — what the settings header
+   * counts.
+   *
+   * Not `eligible`, which is the strict filter. `poolFor` relaxes avoid-recent
+   * rather than starve a draw, so the header read "0 eligible" next to a button
+   * that drew somebody every time it was pressed. Built from the same call
+   * `openDraw` makes, which is what keeps an empty count and an empty stage the
+   * same condition rather than two that merely tend to agree.
+   */
+  get drawPool(): Hero[] {
+    return poolFor(this.squadSize, this.criteria);
+  }
+
   /** Roles actually present in the roster, in canonical order. */
   get availableRoles(): string[] {
-    return ROLE_ORDER.filter((role) => this.heroes.some((hero) => hero.role === role));
+    return availableRoles(this.heroes);
   }
 
   /** Role controls only appear once enrichment supplied roles, so the UI never
-      offers a filter that would silently empty the pool. */
+      offers a filter that would silently empty the pool. Delegated to the same
+      predicate the pool applies the filter behind, so the control on screen and
+      the rule in force cannot disagree. */
   get showRoleControls(): boolean {
-    return this.availableRoles.length > 1;
+    return roleFilterUsable(this.heroes);
   }
 
   get featuredHero(): Hero | null {
@@ -184,7 +234,7 @@ export class OracleStore {
       // did not make is the same wrong advice whether it is read or seen.
       case 'empty': return this.everyoneExcluded
         ? 'Every hero is excluded. Re-enable at least one to draw again.'
-        : 'No hero is eligible. Re-enable a hero or clear your exclusions.';
+        : 'No hero is eligible. Adjust your filters or re-enable a hero.';
       default: {
         if (!this.squad.length) return '';
         const names = this.squad.map((hero) => hero.name).join(', ');
@@ -285,13 +335,16 @@ export class OracleStore {
   async load(): Promise<void> {
     if (this.fetching) return;
     this.fetching = true;
-    // Only onto an empty screen: a manual refresh must not replace the roster
-    // already displayed with an older cached copy of it.
-    const primed = this.heroes.length ? null : this.primeFromCache();
-    this.setStatus(primed ? 'Cached roster — checking for updates…' : 'Syncing live roster…');
     const failed = new Set<string>();
     let lastError: unknown;
+    // Priming is inside the try so the finally always clears `fetching`. It used
+    // to sit outside, which meant one unexpected throw left the flag set and the
+    // guard above turned the refresh button into a no-op for good.
     try {
+      // Only onto an empty screen: a manual refresh must not replace the roster
+      // already displayed with an older cached copy of it.
+      const primed = this.heroes.length ? null : this.primeFromCache();
+      this.setStatus(primed ? 'Cached roster — checking for updates…' : 'Syncing live roster…');
       for (const source of SOURCES) {
         try {
           const heroes = await fetchRoster(source);
@@ -355,6 +408,7 @@ export class OracleStore {
   private adoptRoster(heroes: Hero[], sourceName: string, confidence: RosterConfidence = 'live'): void {
     this.heroes = heroes;
     this.source = sourceName;
+    this.confidence = confidence;
     const byId = this.byId;
     const authoritative = confidence !== 'provisional';
     if (authoritative) {
@@ -365,12 +419,8 @@ export class OracleStore {
     this.squad = this.squad.map((hero) => byId.get(hero.id)).filter((hero): hero is Hero => hero !== undefined);
 
     const wasProvisional = this.provisional;
-    this.provisional = !authoritative;
 
-    // A link this roster cannot read is not necessarily a dead link — it may
-    // simply predate the roster. Leave the address bar alone and do not bank a
-    // fallback draw over it, so reconnecting still recovers the sender's draw.
-    const stranded = confidence !== 'live' && hasUnresolvedShare(byId);
+    const stranded = this.stranded;
 
     // A shared link wins over a fresh roll so the recipient sees the sender's draw.
     // Every roll writes the hash as well, so the marker is what separates a link
@@ -383,6 +433,19 @@ export class OracleStore {
     else if (!this.squad.length) this.openDraw(authoritative && !stranded);
     // The provisional pick survived into a confirmed roster, so it counts now.
     else if (authoritative && wasProvisional && !this.shared && !stranded) this.bankDraw(this.squad);
+  }
+
+  /**
+   * A share link this roster cannot read, that it is also not entitled to
+   * declare dead.
+   *
+   * Only a live roster has standing to say a hero does not exist; a provisional
+   * or cached one may simply predate them. While stranded, the address bar is
+   * left alone and no fallback draw is banked over it, so reconnecting still
+   * recovers the sender's draw.
+   */
+  private get stranded(): boolean {
+    return this.confidence !== 'live' && hasUnresolvedShare(this.byId);
   }
 
   private setStatus(message: string, kind: StatusKind = ''): void {
@@ -430,11 +493,18 @@ export class OracleStore {
     this.shared = shared;
     this.mode = 'draw';
     this.drawId++;
+    // Whatever was on screen is gone, and so is any debt it carried. A draw
+    // restored from the address bar arrives here and must land on `false`: it
+    // was banked when it was rolled, or it belongs to whoever sent the link.
+    // `openDraw` raises the flag again straight after this call when the draw it
+    // just produced was deliberately not banked.
+    this.provisional = false;
     if (record) this.bankDraw(heroes);
   }
 
   /** Tally, recents and the address bar — the irreversible half of a draw. */
   private bankDraw(heroes: Hero[]): void {
+    this.provisional = false;
     this.recordDraw(heroes);
     this.noteStreak(heroes);
     this.persist();
@@ -476,11 +546,13 @@ export class OracleStore {
       return;
     }
     this.commitDraw(drawSquad(pool, this.squadSize, { coverRoles: this.coverRoles, rng: this.rng }), { record });
+    // Set here rather than from the roster's confidence: this is the one place
+    // that knows a draw was produced and left unbanked. `bankDraw` clears it.
+    this.provisional = !record;
   }
 
   /** The roll button. A draw the user asked for is always real. */
   roll(): void {
-    this.provisional = false;
     // Space stays live on an empty stage, so a roll that cannot draw anything
     // must not count: being told to be patient after producing nothing is just
     // wrong. Checked against the same pool openDraw is about to build.
@@ -528,7 +600,19 @@ export class OracleStore {
    */
   applySharedFromHash(): void {
     const draw = readSharedDraw(this.byId);
-    if (draw.length) this.commitDraw(draw, { record: false, shared: !isOwnHash() });
+    if (draw.length) { this.commitDraw(draw, { record: false, shared: !isOwnHash() }); return; }
+    // Nothing resolved, so the address bar no longer describes the stage. A draw
+    // of our own makes no claim about the hash — erasing or editing the
+    // permalink is not a request to reroll — so only a shared draw has to answer
+    // for this.
+    if (!this.shared) return;
+    // Its only claim on the screen was a link that is now gone or unreadable,
+    // and keeping the SHARED DRAW label past that point is what made copyLink
+    // hand out a hash naming heroes the stage was not showing. Draw our own,
+    // under exactly the rule a fresh load with this hash would use, so the two
+    // paths cannot disagree: a live roster replaces a dead hash, and anything
+    // less leaves it for a reconnect.
+    this.openDraw(this.confidence !== 'provisional' && !this.stranded);
   }
 
   /* ── User actions ── */

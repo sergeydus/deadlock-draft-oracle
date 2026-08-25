@@ -17,7 +17,7 @@ import { dirname, join } from 'node:path';
 import { COMPLEXITY_LEVELS, ROLE_ORDER, SOURCES } from '../src/constants.ts';
 import { aliasesFrom, normalise, unwrap } from '../src/lib/feed.ts';
 import { drawFrom, drawSquad, mulberry32 } from '../src/lib/random.ts';
-import { eligibleHeroes, hasRoleData, poolFor } from '../src/lib/pool.ts';
+import { availableRoles, eligibleHeroes, poolFor, roleFilterUsable } from '../src/lib/pool.ts';
 import { mergeInto, parseRoster } from '../src/lib/roster.ts';
 import { isHeroRecord, isRecentPick, loadState } from '../src/lib/storage.ts';
 import { clearHash, isOwnHash, parseSquadHash, squadToHash, writeHash } from '../src/lib/share.ts';
@@ -174,8 +174,25 @@ check('role filter keeps only the selected roles', ids({ roles: new Set(['assass
 check('a hero with no role is excluded while a role filter is active', !ids({ roles: new Set(['assassin']) }).includes('roleless'));
 check('an empty role filter means every role', ids().length === mixed.length - 1, ids().join(', '));
 
-check('hasRoleData detects roles', hasRoleData(mixed));
-check('hasRoleData is false when the merge found none', !hasRoleData(rolelessPool));
+check('availableRoles lists what the roster carries, in canonical order',
+  availableRoles(mixed).join(',') === ROLE_ORDER.filter((role) => mixed.some((h) => h.role === role)).join(','),
+  availableRoles(mixed).join(','));
+check('a roster with no roles offers none', availableRoles(rolelessPool).length === 0);
+check('a role filter is usable once two roles exist', roleFilterUsable(mixed));
+check('a role filter is unusable with no roles at all', !roleFilterUsable(rolelessPool));
+
+// The guard and the role chips have to agree, or a saved filter applies with no
+// control on screen to clear it. They used to disagree on exactly one roster:
+// the chips need two roles to appear, the filter applied on one.
+const oneRole = [
+  hero({ id: 'a', role: 'marksman' }),
+  hero({ id: 'b', role: '' }),
+  hero({ id: 'c', role: '' }),
+];
+check('one role is not enough to filter by', !roleFilterUsable(oneRole), availableRoles(oneRole).join(','));
+check('a saved filter is ignored while the chips are hidden',
+  eligibleHeroes(criteria({ heroes: oneRole, roles: new Set(['assassin']) })).length === oneRole.length,
+  String(eligibleHeroes(criteria({ heroes: oneRole, roles: new Set(['assassin']) })).length));
 
 // Roles only exist after the enrichment pass. A role filter saved from a healthy
 // session must not apply on a later one where enrichment failed: it would match
@@ -207,6 +224,34 @@ check('a squad round-trips through the hash',
   JSON.stringify(parseSquadHash(`#squad=${squadToHash([hero({ id: 'inferno' }), hero({ id: 'sumo' })])}`)) === '["inferno","sumo"]');
 check('a hash without a squad yields nothing', parseSquadHash('#seed=4').length === 0);
 check('the hash is capped at a full squad', parseSquadHash(`#squad=${'a,b,c,d,e,f,g,h'}`).length === 6);
+
+// The address bar is untrusted input. A lone `%` is not a valid escape, and
+// Chrome keeps it verbatim in location.hash, so `#squad=%` reaches this parser
+// exactly as typed. It used to throw URIError from inside the roster load,
+// where it was swallowed as a feed failure and left the app on "Loading"
+// forever — a link anyone could send.
+let parseThrew = null;
+try { parseSquadHash('#squad=%'); } catch (error) { parseThrew = error; }
+check('a malformed escape never throws', parseThrew === null, String(parseThrew));
+check('a malformed escape is read as itself', JSON.stringify(parseSquadHash('#squad=%')) === '["%"]',
+  JSON.stringify(parseSquadHash('#squad=%')));
+check('a malformed escape mid-list keeps its neighbours',
+  JSON.stringify(parseSquadHash('#squad=haze,%E0%A4%A,lash')) === '["haze","%E0%A4%A","lash"]',
+  JSON.stringify(parseSquadHash('#squad=haze,%E0%A4%A,lash')));
+
+// Decoded once, not twice. `%2541` is the encoding of the literal id `%41`;
+// decoding it a second time silently turns it into `A` and resolves the link to
+// the wrong hero.
+check('an escape is decoded exactly once',
+  JSON.stringify(parseSquadHash('#squad=%2541')) === '["%41"]', JSON.stringify(parseSquadHash('#squad=%2541')));
+check('an id containing a separator survives the round trip',
+  JSON.stringify(parseSquadHash(`#squad=${squadToHash([hero({ id: 'a,b' }), hero({ id: 'c' })])}`)) === '["a,b","c"]',
+  JSON.stringify(parseSquadHash(`#squad=${squadToHash([hero({ id: 'a,b' }), hero({ id: 'c' })])}`)));
+check('empty segments are dropped rather than sought in the roster',
+  parseSquadHash('#squad=,,').length === 0);
+check('another parameter after squad is not swallowed',
+  JSON.stringify(parseSquadHash('#squad=haze&seed=4')) === '["haze"]',
+  JSON.stringify(parseSquadHash('#squad=haze&seed=4')));
 
 /* ── Telling your own hash from somebody else's ──
    Every roll writes the hash, so it doubles as a permalink for the current tab
@@ -290,6 +335,205 @@ check('a pasted link IS labelled SHARED DRAW', recipient.shared && recipient.sta
 check('a shared draw is kept out of the tally', Object.keys(recipient.tally).length === 0);
 check('a shared draw is kept out of recents', recipient.recent.length === 0);
 
+// Deleting the hash out of the address bar fires hashchange with nothing left
+// to resolve. A shared draw's only claim on the screen is that link, so once it
+// is gone the stage must stop calling somebody else's pick a SHARED DRAW.
+location.hash = '';
+recipient.applySharedFromHash();
+check('clearing the hash retires the shared draw', recipient.shared === false, recipient.stageLabel);
+check('clearing the hash leaves a draw of our own on the stage',
+  recipient.mode === 'draw' && recipient.squad.length === 1, `${recipient.mode} ${squadIds(recipient)}`);
+check('the draw that replaces it is banked like any other', recipient.pickCount === 1, String(recipient.pickCount));
+check('the address bar names the new draw', location.hash === `#squad=${squadIds(recipient)}`, location.hash);
+
+// A hash naming heroes this roster cannot resolve is the harder case, and the
+// app already had an answer for it on the load path — hashchange just was not
+// using it. Whether the link may still be good depends on the roster's
+// confidence, but `shared` must go either way: the stage cannot keep presenting
+// the previous pick as the draw a different URL describes. It used to, and
+// copyLink then copied the dead hash instead of the heroes on screen.
+resetBrowser({ hash: '#squad=haze,lash', state: null });
+stubFetch(feed);
+const liveDeadLink = new OracleStore();
+await liveDeadLink.load();
+const wasShowing = squadIds(liveDeadLink);
+location.hash = '#squad=nobody';
+liveDeadLink.applySharedFromHash();
+check('a live roster stops calling the old pick a shared draw', liveDeadLink.shared === false, liveDeadLink.stageLabel);
+check('a live roster is entitled to replace a dead hash',
+  location.hash === `#squad=${squadIds(liveDeadLink)}`, location.hash);
+check('and it draws rather than keeping what the old link named',
+  squadIds(liveDeadLink) !== wasShowing || liveDeadLink.pickCount === 1,
+  `${wasShowing} -> ${squadIds(liveDeadLink)}`);
+await liveDeadLink.copyLink();
+check('copyLink copies the draw on screen, not the dead hash',
+  location.href.endsWith(`#squad=${squadIds(liveDeadLink)}`), location.href);
+
+// Same hash, but the roster came from the cache because every feed was down.
+// That roster is not entitled to call the link dead — it may simply predate the
+// hero — so the address bar survives and the fallback draw is not banked over
+// it. `shared` still goes: the stage is showing its own pick now.
+resetBrowser();
+stubFetch(feed);
+const seeding = new OracleStore();
+await seeding.load();
+const cachedRoster = storage.get('draftOracle_v1_roster');
+
+resetBrowser({ hash: '#squad=haze,lash', state: null });
+storage.set('draftOracle_v1_roster', cachedRoster);
+stubFetch('fail');
+const offlineLink = await quietly(async () => {
+  const store = new OracleStore();
+  await store.load();
+  return store;
+});
+check('a cached roster still restores the senderuFFFDs draw', offlineLink.shared === true, offlineLink.stageLabel);
+location.hash = '#squad=nobody';
+offlineLink.applySharedFromHash();
+check('a cached roster also stops claiming the old draw', offlineLink.shared === false, offlineLink.stageLabel);
+check('but it leaves the unresolved link in the address bar',
+  location.hash === '#squad=nobody', location.hash);
+check('and does not bank a draw over it', offlineLink.pickCount === 0, String(offlineLink.pickCount));
+
+// The handover. An unbanked fallback drawn over an unresolved link has to be
+// finished once a feed confirms the roster — banked, with the dead hash
+// replaced — or the app ends up claiming a live roster while showing an
+// unrecorded PICK 00 whose address names a different hero. Two routes reach that
+// state: this one, and a cold load with the same hash and no hashchange at all.
+stubFetch(feed);
+await offlineLink.load();
+check('reconnecting banks the fallback drawn over a dead link',
+  offlineLink.pickCount === 1, `picks=${offlineLink.pickCount}`);
+check('reconnecting replaces the hash the fallback was drawn over',
+  location.hash === `#squad=${squadIds(offlineLink)}`, location.hash);
+check('and the roster is live afterwards', offlineLink.confidence === 'live', offlineLink.confidence);
+
+// The same handover without any hashchange: the link was already unresolvable
+// when the cached roster loaded.
+resetBrowser({ hash: '#squad=nobody', state: null });
+storage.set('draftOracle_v1_roster', cachedRoster);
+stubFetch('fail');
+const coldStranded = await quietly(async () => {
+  const store = new OracleStore();
+  await store.load();
+  return store;
+});
+check('a cold cached load draws over an unresolvable link without banking',
+  coldStranded.pickCount === 0 && coldStranded.squad.length === 1 && location.hash === '#squad=nobody',
+  `picks=${coldStranded.pickCount} hash=${location.hash}`);
+stubFetch(feed);
+await coldStranded.load();
+check('reconnecting finishes that draw too',
+  coldStranded.pickCount === 1 && location.hash === `#squad=${squadIds(coldStranded)}`,
+  `picks=${coldStranded.pickCount} hash=${location.hash}`);
+
+// A draw restored from the address bar is not a fallback and must never be
+// banked later — it was already counted when it was rolled. Retyping your own
+// hash goes through the same commit, so this is the case that keeps the
+// "unbanked" flag honest rather than merely correct on the paths above.
+resetBrowser();
+stubFetch(feed);
+const retyped = new OracleStore();
+await retyped.load();
+const retypedHash = location.hash;
+const retypedCount = retyped.pickCount;
+retyped.applySharedFromHash();
+await retyped.load();
+check('retyping your own hash never double-counts the draw',
+  retyped.pickCount === retypedCount, `${retypedCount} -> ${retyped.pickCount} at ${retypedHash}`);
+
+// The flag describes the draw on screen, so anything that replaces that draw has
+// to clear it. Setting it only in openDraw stops a restored draw from raising
+// the flag, but not from inheriting one: a fallback leaves it true, and the next
+// hash that resolves inherits it and gets banked a second time on reconnect.
+//
+// Reachable by hand — editing a hash creates a history entry, so Back returns to
+// the entry this tab wrote, marker intact, and isOwnHash() is true again.
+resetBrowser();
+storage.set('draftOracle_v1_roster', cachedRoster);
+stubFetch('fail');
+const staleFlag = await quietly(async () => {
+  const store = new OracleStore();
+  await store.load();
+  return store;
+});
+staleFlag.roll();                                  // our own draw, banked, marker written
+const staleOwnHash = location.hash;
+const staleOwnState = JSON.parse(JSON.stringify(history.state));
+const staleBanked = staleFlag.pickCount;
+
+location.hash = '#squad=haze,lash';                // a link somebody sent
+staleFlag.applySharedFromHash();
+location.hash = '#squad=nobody';                   // edited to something the cache cannot read
+staleFlag.applySharedFromHash();
+check('the fallback is the one draw still owing a tally entry',
+  staleFlag.pickCount === staleBanked, `picks=${staleFlag.pickCount}`);
+
+location.hash = staleOwnHash;                      // Back, onto the entry this tab wrote
+history.state = staleOwnState;
+staleFlag.applySharedFromHash();
+check('going back to your own hash restores that draw',
+  location.hash === `#squad=${squadIds(staleFlag)}`, `${location.hash} vs ${squadIds(staleFlag)}`);
+
+stubFetch(feed);
+await staleFlag.load();
+check('and reconnecting does not bank the draw it replaced the fallback with',
+  staleFlag.pickCount === staleBanked, `${staleBanked} -> ${staleFlag.pickCount}`);
+
+// The invariant behind all of the above, swept over every shape a hash can
+// change into. The stage may call a draw SHARED only while the address bar
+// actually names that draw — which is exactly what the old unknown-hash
+// behaviour broke, and it is cheaper to state once than to re-derive per case.
+for (const next of ['', '#squad=nobody', '#squad=haze', '#seed=4', '#squad=%']) {
+  resetBrowser({ hash: '#squad=haze,lash', state: null });
+  stubFetch(feed);
+  const tab = new OracleStore();
+  await tab.load();
+  location.hash = next;
+  tab.applySharedFromHash();
+  check(`shared implies the hash names the stage — after "${next}"`,
+    !tab.shared || location.hash === `#squad=${squadIds(tab)}`,
+    `shared=${tab.shared} hash="${location.hash}" stage=${squadIds(tab)}`);
+}
+
+// And clearing the hash on a draw of your own is not a request to redraw it.
+resetBrowser();
+stubFetch(feed);
+const mine = new OracleStore();
+await mine.load();
+const myDraw = squadIds(mine);
+const myCount = mine.pickCount;
+location.hash = '';
+mine.applySharedFromHash();
+check('clearing the hash on your own draw changes nothing',
+  squadIds(mine) === myDraw && mine.pickCount === myCount, `${squadIds(mine)} ${mine.pickCount}`);
+
+// A hostile share link. `#squad=%` is not a valid escape and browsers keep it
+// verbatim, so it reaches the parser as typed. Confirmed against the deployed
+// site: it left the stage on "Loading your next main" with the roster already
+// in hand, because the URIError surfaced inside adoptRoster and load()'s
+// per-source catch filed it as a dead feed. The second visit was worse — the
+// cache path throws before the try, so `fetching` stayed true and the refresh
+// button could never fire again.
+resetBrowser({ hash: '#squad=%', state: null });
+stubFetch(feed);
+const malformed = new OracleStore();
+await malformed.load();
+check('a malformed hash still loads the roster', malformed.heroes.length === rosterIds.length, String(malformed.heroes.length));
+check('a malformed hash still draws', malformed.mode === 'draw' && malformed.squad.length === 1, malformed.mode);
+check('a malformed hash leaves the store retryable', malformed.fetching === false);
+
+// Same link, second visit: this time there is a cached roster to prime from.
+resetBrowser({ hash: '#squad=%', state: null, keepStorage: true });
+stubFetch(feed);
+const malformedAgain = new OracleStore();
+let loadThrew = null;
+try { await malformedAgain.load(); } catch (error) { loadThrew = error; }
+check('a malformed hash does not reject the load', loadThrew === null, String(loadThrew));
+check('a malformed hash over a primed cache still draws',
+  malformedAgain.mode === 'draw' && malformedAgain.squad.length === 1, malformedAgain.mode);
+check('a malformed hash over a primed cache leaves the store retryable', malformedAgain.fetching === false);
+
 // The refresh button re-runs load() against a roster that is already on screen.
 resetBrowser();
 stubFetch(feed);
@@ -319,6 +563,46 @@ const afterEmpty = new OracleStore();
 await afterEmpty.load();
 check('reloading does not resurrect an excluded hero', !afterEmpty.squad.some((member) => member.id === banished), squadIds(afterEmpty));
 check('reloading an emptied pool stays empty', afterEmpty.mode === 'empty', afterEmpty.mode);
+
+// Filters can empty the pool with nothing excluded at all, and the advice used
+// to tell you to clear exclusions you never made.
+resetBrowser();
+stubFetch(feed);
+const filterEmptied = new OracleStore();
+await filterEmptied.load();
+filterEmptied.complexity = new Set([4]);
+filterEmptied.roles = new Set(['marksman']);
+filterEmptied.roll();
+check('a filter combination can empty the pool with nothing excluded',
+  filterEmptied.mode === 'empty' && filterEmptied.excluded.size === 0,
+  `${filterEmptied.mode} ${filterEmptied.excluded.size}`);
+check('the advice does not blame exclusions that do not exist',
+  !/exclusion/i.test(filterEmptied.announcement), filterEmptied.announcement);
+check('the advice names the filters instead', /filter/i.test(filterEmptied.announcement), filterEmptied.announcement);
+check('an emptied pool is still not the everyone-excluded egg',
+  filterEmptied.everyoneExcluded === false);
+
+// The count in the settings header has to mean what the roll button will do.
+// `eligible` is the strict filter; a draw uses poolFor, which relaxes
+// avoid-recent rather than starve itself, so the header could read "0 eligible"
+// beside a button that drew somebody every time it was pressed.
+resetBrowser();
+stubFetch(feed);
+const starvedByRecents = new OracleStore();
+await starvedByRecents.load();
+for (const id of rosterIds.slice(3)) starvedByRecents.excluded.add(id);
+for (let i = 0; i < 6; i++) starvedByRecents.roll();
+check('recents can starve the strict filter',
+  starvedByRecents.eligible.length === 0, String(starvedByRecents.eligible.length));
+check('the count on screen is the pool the roll will use',
+  starvedByRecents.drawPool.length === 3,
+  `${starvedByRecents.eligible.length} strict, ${starvedByRecents.drawPool.length} shown`);
+const starvedBefore = starvedByRecents.pickCount;
+starvedByRecents.roll();
+check('and that roll does draw',
+  starvedByRecents.mode === 'draw' && starvedByRecents.pickCount === starvedBefore + 1, starvedByRecents.mode);
+check('an empty stage and an empty count are the same condition',
+  filterEmptied.drawPool.length === 0 && filterEmptied.mode === 'empty', String(filterEmptied.drawPool.length));
 
 // Settings round-trip, and ids the roster no longer has are pruned.
 resetBrowser();
@@ -371,6 +655,42 @@ check('and is narrowed on the way in',
   migrated.recent.every((pick) => Object.keys(pick).sort().join(',') === 'id,name'),
   JSON.stringify(migrated.recent));
 check('the names survive the narrowing', migrated.recent.map((pick) => pick.name).join(',') === 'Haze,Lash');
+
+// Counts are counts. `Number.isFinite` let fractions through, and a stored
+// squadSize of 1.5 restored into a state no chip represents: it drew two heroes
+// and the stage read "DRAW 2.5".
+resetBrowser();
+storage.set('draftOracle_v1', JSON.stringify({ squadSize: 1.5, pickCount: 0.5, tally: { haze: 2.7, lash: 3 } }));
+const fractional = loadState();
+check('a fractional squad size is refused', fractional.squadSize === undefined, String(fractional.squadSize));
+check('a fractional pick count is refused', fractional.pickCount === undefined, String(fractional.pickCount));
+check('a fractional tally entry is dropped', fractional.tally.haze === undefined, JSON.stringify(fractional.tally));
+check('a whole tally entry beside it is kept', fractional.tally.lash === 3, JSON.stringify(fractional.tally));
+
+resetBrowser();
+storage.set('draftOracle_v1', JSON.stringify({ squadSize: 9, pickCount: 1e308 * 10, tally: { haze: 2 } }));
+const absurd = loadState();
+check('an oversized squad still clamps to a full stack', absurd.squadSize === 6, String(absurd.squadSize));
+check('an infinite pick count is refused', absurd.pickCount === undefined, String(absurd.pickCount));
+
+resetBrowser();
+storage.set('draftOracle_v1', JSON.stringify({ squadSize: 3, pickCount: 12, tally: { haze: 2 } }));
+const sane = loadState();
+check('ordinary whole numbers still load',
+  sane.squadSize === 3 && sane.pickCount === 12 && sane.tally.haze === 2, JSON.stringify(sane));
+
+// And end to end: a hand-edited profile must not leave the store somewhere the
+// UI has no way to describe.
+resetBrowser();
+storage.set('draftOracle_v1', JSON.stringify({ squadSize: 1.5, pickCount: 0.5 }));
+stubFetch(feed);
+const repaired = new OracleStore();
+await repaired.load();
+check('a fractional profile restores to a squad size the chips offer',
+  Number.isSafeInteger(repaired.squadSize) && repaired.squadSize >= 1 && repaired.squadSize <= 6,
+  String(repaired.squadSize));
+check('and to a draw count the stage can print',
+  Number.isSafeInteger(repaired.pickCount), repaired.stageLabel);
 
 // Round-trip through a real store.
 resetBrowser();
@@ -895,6 +1215,45 @@ const renderedTokens = new Set(
 const unstyled = [...styledClasses].filter((name) => !renderedTokens.has(name)).sort();
 check('every class styles.css targets is still rendered', unstyled.length === 0,
   unstyled.length ? `no component produces: ${unstyled.map((n) => `.${n}`).join(', ')}` : `all ${styledClasses.size} classes`);
+
+/* ── Accessibility: focus and contrast ──
+   Two things a stylesheet can silently take away. The focus check is a
+   contract with the rule block in styles.css; the contrast check does the
+   sums, because "looks muted enough" is exactly how 3.77:1 shipped. */
+section('accessibility');
+
+// Every interactive element needs a visible focus indicator. The search input
+// suppresses its own outline so it sits flush in the box, and for a while
+// nothing put one back — a keyboard user tabbing in saw no change at all.
+const focusable = ['.icon-button', '.primary-button', '.secondary-button', '.hero-card', '.search-box input'];
+const unfocused = focusable.filter((selector) => !bareCss.includes(selector + ':focus-visible'));
+check('every focusable control has a focus-visible ring', unfocused.length === 0, unfocused.join(', '));
+
+// WCAG 1.4.3 for normal-size text. The panel tints itself with black at 12%
+// over the shell gradient, so these are the composited backgrounds, not the
+// gradient stops.
+const luminance = (hex) => {
+  const channels = [1, 3, 5]
+    .map((at) => parseInt(hex.slice(at, at + 2), 16) / 255)
+    .map((value) => (value <= 0.03928 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4));
+  return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
+};
+const contrast = (fg, bg) => {
+  const [light, dark] = [luminance(fg), luminance(bg)].sort((a, b) => b - a);
+  return (light + 0.05) / (dark + 0.05);
+};
+const colourOf = (selector) => {
+  const block = bareCss.slice(bareCss.indexOf(selector + ' {'));
+  const declaration = block.slice(0, block.indexOf('}')).split('color:')[1] ?? '';
+  return declaration.split(';')[0].trim().toLowerCase();
+};
+// The darkest and lightest ground any of this text sits on.
+const grounds = ['#101217', '#12141a'];
+for (const selector of ['.source-note', '.empty-copy', '.recent-chip']) {
+  const colour = colourOf(selector);
+  const worst = Math.min(...grounds.map((ground) => contrast(colour, ground)));
+  check(`${selector} clears 4.5:1 against the panel`, worst >= 4.5, `${colour} at ${worst.toFixed(2)}:1`);
+}
 
 /* ── Social metadata ──
    Every share link used to unfurl as a bare URL. The card assets live in

@@ -62,7 +62,9 @@ export const SettingsPanel = observer(function SettingsPanel() {
           <p className="eyebrow">DRAFT SETTINGS</p>
           <h2>Shape the chaos</h2>
         </div>
-        <span className="eligible-count">{store.eligible.length} eligible</span>
+        {/* drawPool, not eligible: the number has to be what the roll button
+            will actually draw from. See the getter. */}
+        <span className="eligible-count">{store.drawPool.length} eligible</span>
       </div>
 
       <ToggleRow
@@ -123,9 +125,12 @@ export const SettingsPanel = observer(function SettingsPanel() {
             />
           </FilterRow>
           {store.squadSize > 1 && (
+            // Not "cover every role": with four roles and two or three slots
+            // that is not a promise the draw can keep. It takes one of each
+            // while the slots last, which is coverage maximised, not guaranteed.
             <ToggleRow
-              title="Cover every role"
-              hint="Squad draws take one of each role before filling up."
+              title="Maximise role coverage"
+              hint="Squad draws take one of each role first, then fill up."
               checked={store.coverRoles}
               onChange={store.setCoverRoles}
             />
@@ -138,7 +143,7 @@ export const SettingsPanel = observer(function SettingsPanel() {
 
       <p className="source-note">
         Roster comes from the community’s live game-data feeds.{' '}
-        <a href="https://deadlock.io/api/v1/heroes.json" target="_blank" rel="noreferrer">View source ↗</a>
+        <a href={store.sourceUrl} target="_blank" rel="noreferrer">View source ↗</a>
       </p>
     </div>
   );
