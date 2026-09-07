@@ -67,7 +67,7 @@ export function resetBrowser({ hash = '', state = null, keepStorage = false } = 
  */
 export function stubFetch(behaviour) {
   globalThis.fetch = async (url, { signal } = {}) => {
-    const result = typeof behaviour === 'function' ? behaviour(String(url)) : behaviour;
+    const result = await (typeof behaviour === 'function' ? behaviour(String(url)) : behaviour);
     if (result === 'fail') throw new Error('stubbed network failure');
     if (result === 'hang') {
       return new Promise((_resolve, reject) => {

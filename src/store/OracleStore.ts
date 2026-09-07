@@ -1,14 +1,14 @@
 import { makeAutoObservable, runInAction } from 'mobx';
 import { COMPLEXITY_LEVELS, RECENT_LIMIT, SOURCES, TALLY_ROWS } from '../constants.ts';
 import { drawFrom, drawSquad, mulberry32, randomSeed, type Rng } from '../lib/random.ts';
-import { availableRoles, eligibleHeroes, poolFor, roleFilterUsable, type PoolCriteria } from '../lib/pool.ts';
+import { availableRoles, eligibleHeroes, poolFor, replacementPool, roleFilterUsable, type PoolCriteria } from '../lib/pool.ts';
 import { fetchEnrichment, fetchRoster, mergeInto } from '../lib/roster.ts';
 import {
   ARCANE_OFF, ARCANE_ON, EYEBROW_TAPS, IMPATIENT_LINE, IMPATIENT_WINDOW_MS, INSISTENT_AT, INVOCATION,
   KONAMI, TAP_WINDOW_MS, advanceSequence, insistentLine, isImpatient, milestoneCrossed, milestoneLine,
   prophecy, secretFor,
 } from '../lib/eggs.ts';
-import { clearHash, copyToClipboard, hasUnresolvedShare, isOwnHash, readSharedDraw, writeHash } from '../lib/share.ts';
+import { clearHash, copyToClipboard, hasUnresolvedShare, isOwnHash, readSharedDraw, squadUrl, writeHash } from '../lib/share.ts';
 import { loadCachedRoster, loadState, saveCachedRoster, saveState } from '../lib/storage.ts';
 import type { Hero, RecentPick, StatusKind } from '../types.ts';
 
@@ -346,23 +346,28 @@ export class OracleStore {
       const primed = this.heroes.length ? null : this.primeFromCache();
       this.setStatus(primed ? 'Cached roster — checking for updates…' : 'Syncing live roster…');
       for (const source of SOURCES) {
+        let heroes: Hero[];
         try {
-          const heroes = await fetchRoster(source);
-          runInAction(() => {
-            // Authoritative: this is where saved state is reconciled and a
-            // provisional draw either becomes real or is replaced.
-            this.adoptRoster(heroes, source.name);
-            this.setStatus(`Live roster · ${source.name}`, 'live');
-          });
-          saveCachedRoster({ heroes, source: source.name });
-          // Deliberately not awaited: the first draw should not wait on metadata
-          // that only enables filters and colour.
-          void this.enrich(source.name, failed);
-          return;
+          heroes = await fetchRoster(source);
         } catch (error) {
           lastError = error;
           failed.add(source.name);
+          continue;
         }
+        // Only fetching and parsing belong to the failover catch above. An
+        // application error while adopting a valid roster must surface instead
+        // of being misreported as two dead community feeds.
+        runInAction(() => {
+          // Authoritative: this is where saved state is reconciled and a
+          // provisional draw either becomes real or is replaced.
+          this.adoptRoster(heroes, source.name);
+          this.setStatus(`Live roster · ${source.name}`, 'live');
+        });
+        saveCachedRoster({ heroes, source: source.name });
+        // Deliberately not awaited: the first draw should not wait on metadata
+        // that only enables filters and colour.
+        void this.enrich(source.name, failed);
+        return;
       }
 
       runInAction(() => {
@@ -541,8 +546,9 @@ export class OracleStore {
       this.shared = false;
       this.mode = 'empty';
       // Otherwise the URL still names the old draw, and reloading restores it —
-      // excluded heroes included. An unresolved share link is not ours to drop.
-      if (!hasUnresolvedShare(this.byId)) clearHash();
+      // excluded heroes included. Preserve an unresolved link only while this
+      // roster may be incomplete; a live roster is entitled to retire it.
+      if (!this.stranded) clearHash();
       return;
     }
     this.commitDraw(drawSquad(pool, this.squadSize, { coverRoles: this.coverRoles, rng: this.rng }), { record });
@@ -575,18 +581,23 @@ export class OracleStore {
   rerollSlot(index: number): void {
     const current = this.squad[index];
     if (!current) return;
-    this.provisional = false;
+    const wasProvisional = this.provisional;
     this.reseed();
     const held = new Set(this.squad.filter((_, i) => i !== index).map((hero) => hero.id));
-    let pool = poolFor(this.squad.length, this.criteria).filter((hero) => !held.has(hero.id) && hero.id !== current.id);
-    if (!pool.length) pool = eligibleHeroes({ ...this.criteria, ignoreRecent: true }).filter((hero) => !held.has(hero.id));
+    const pool = replacementPool(this.squad.length, current.id, held, this.criteria);
     if (!pool.length) { this.showToast('No other hero is eligible for that slot.'); return; }
     const [hero] = drawFrom(pool, 1, this.rng);
-    this.squad = this.squad.map((existing, i) => (i === index ? hero : existing));
+    const nextSquad = this.squad.map((existing, i) => (i === index ? hero : existing));
+    this.squad = nextSquad;
     this.featured = index;
     this.shared = false;
     this.drawId++;
-    this.recordDraw([hero]);
+    this.provisional = false;
+    // A provisional opening squad has not recorded any of its members yet. A
+    // successful user reroll makes the resulting squad real, so record it once
+    // in full. Do not call bankDraw: slot rerolls deliberately never affect the
+    // repeated-solo streak, regardless of whether the roster was cached.
+    this.recordDraw(wasProvisional ? nextSquad : [hero]);
     this.persist();
     writeHash(this.squad);
   }
@@ -661,10 +672,13 @@ export class OracleStore {
   async copyLink(): Promise<void> {
     // Same rule: a received draw already carries the sender's hash, and marking
     // it here would quietly turn a shared link into this tab's own.
-    if (!this.shared) writeHash(this.squad);
-    const copied = await copyToClipboard(location.href);
+    const url = this.shared ? location.href : squadUrl(this.squad);
+    const addressUpdated = this.shared || writeHash(this.squad);
+    const copied = await copyToClipboard(url);
     runInAction(() => {
-      this.showToast(copied ? 'Draw link copied to clipboard.' : 'Copy failed — the link is in your address bar.');
+      this.showToast(copied
+        ? 'Draw link copied to clipboard.'
+        : addressUpdated ? 'Copy failed — the link is in your address bar.' : 'Copy failed — your browser blocked the link.');
     });
   }
 

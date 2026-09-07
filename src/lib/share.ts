@@ -61,11 +61,15 @@ export function parseSquadHash(hash: string): string[] {
 }
 
 function currentMarker(): OwnHashMarker | null {
-  const state = history.state as Record<string, unknown> | null;
-  const marker = state?.[STATE_KEY];
-  return marker && typeof marker === 'object' && typeof (marker as OwnHashMarker).hash === 'string'
-    ? marker as OwnHashMarker
-    : null;
+  try {
+    const state = history.state as Record<string, unknown> | null;
+    const marker = state?.[STATE_KEY];
+    return marker && typeof marker === 'object' && typeof (marker as OwnHashMarker).hash === 'string'
+      ? marker as OwnHashMarker
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -82,42 +86,69 @@ export function isOwnHash(): boolean {
   return marker !== null && marker.hash === location.hash;
 }
 
-export function writeHash(squad: readonly Hero[]): void {
-  if (!squad.length) return;
+/** An absolute share URL for exactly the supplied squad, independent of the current hash. */
+export function squadUrl(squad: readonly Hero[]): string {
+  const base = location.href.split('#', 1)[0];
+  return `${base}#squad=${squadToHash(squad)}`;
+}
+
+/** @returns false when the browser refuses the History API update. */
+export function writeHash(squad: readonly Hero[]): boolean {
+  if (!squad.length) return false;
   // Bind the marker to the hash being written, NOT to `location.hash`: that is
   // still the previous value here, and a stale marker never matches, which
   // silently turns every draw back into a "shared" one.
   const hash = `#squad=${squadToHash(squad)}`;
-  const state = { ...(history.state as Record<string, unknown> | null), [STATE_KEY]: { hash } };
-  history.replaceState(state, '', `${location.pathname}${location.search}${hash}`);
+  try {
+    const state = { ...(history.state as Record<string, unknown> | null), [STATE_KEY]: { hash } };
+    history.replaceState(state, '', `${location.pathname}${location.search}${hash}`);
+    return true;
+  } catch {
+    // Safari can rate-limit replaceState with SecurityError. A draw must remain
+    // usable and banked even when the browser refuses to update its permalink.
+    return false;
+  }
 }
 
 /** Drop a `#squad=` that no longer describes anything, marker included. */
-export function clearHash(): void {
-  if (!location.hash) return;
-  const { [STATE_KEY]: _dropped, ...rest } = (history.state ?? {}) as Record<string, unknown>;
-  history.replaceState(rest, '', `${location.pathname}${location.search}`);
+export function clearHash(): boolean {
+  if (!location.hash) return true;
+  try {
+    const { [STATE_KEY]: _dropped, ...rest } = (history.state ?? {}) as Record<string, unknown>;
+    history.replaceState(rest, '', `${location.pathname}${location.search}`);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**
- * True when the address bar names a draw that *this* roster cannot resolve.
+ * True when the address bar names a draw that *this* roster cannot resolve
+ * exactly, including a duplicated id.
  *
  * The third state between "no share link" and "a share link we restored": a
- * link for a hero the roster in hand has never heard of. Only a live roster is
- * entitled to conclude that hero is gone — a cached or incomplete one must
- * leave the hash alone, or a link that would work again on reconnect is
- * destroyed while offline.
+ * link with an id the roster in hand has never heard of, or one repeated twice.
+ * Only a live roster is entitled to conclude that an unknown hero is gone — a
+ * cached or incomplete one must leave the hash alone, or a link that would work
+ * again on reconnect is destroyed while offline.
  */
 export function hasUnresolvedShare(byId: ReadonlyMap<string, Hero>): boolean {
   if (isOwnHash()) return false;
   const ids = parseSquadHash(location.hash);
-  return ids.length > 0 && ids.every((id) => !byId.has(id));
+  return ids.length > 0
+    && (new Set(ids).size !== ids.length || ids.some((id) => !byId.has(id)));
 }
 
 export function readSharedDraw(byId: ReadonlyMap<string, Hero>): Hero[] {
-  return parseSquadHash(location.hash)
-    .map((id) => byId.get(id))
-    .filter((hero): hero is Hero => hero !== undefined);
+  const ids = parseSquadHash(location.hash);
+  if (!ids.length || new Set(ids).size !== ids.length) return [];
+  const heroes: Hero[] = [];
+  for (const id of ids) {
+    const hero = byId.get(id);
+    if (!hero) return [];
+    heroes.push(hero);
+  }
+  return heroes;
 }
 
 /** @returns true when the URL made it to the clipboard. */
@@ -127,15 +158,21 @@ export async function copyToClipboard(url: string): Promise<boolean> {
     return true;
   } catch {
     // The Clipboard API needs a secure context; fall back to a throwaway selection.
+    const previousFocus = document.activeElement as HTMLElement | null;
     const field = document.createElement('textarea');
     field.value = url;
     field.setAttribute('readonly', '');
     field.style.position = 'fixed';
     field.style.opacity = '0';
     document.body.append(field);
-    field.select();
-    const copied = document.execCommand?.('copy') ?? false;
-    field.remove();
-    return copied;
+    try {
+      field.select();
+      return document.execCommand?.('copy') ?? false;
+    } catch {
+      return false;
+    } finally {
+      field.remove();
+      previousFocus?.focus?.();
+    }
   }
 }

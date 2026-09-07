@@ -9,7 +9,7 @@ export const RECENT_LIMIT = 5;
 /** Deadlock is 6v6, so a full stack is six heroes. */
 export const MAX_SQUAD = 6;
 /** The game's own rating; both feeds agree on it for every released hero. */
-export const COMPLEXITY_LEVELS = [1, 2, 3, 4];
+export const COMPLEXITY_LEVELS = [1, 2, 3, 4] as const;
 /** deadlock-api `hero_type`. Only that feed carries it, so it arrives via enrichment. */
 export const ROLE_ORDER = ['marksman', 'assassin', 'mystic', 'brawler'];
 export const TALLY_ROWS = 6;

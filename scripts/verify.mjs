@@ -20,7 +20,7 @@ import { drawFrom, drawSquad, mulberry32 } from '../src/lib/random.ts';
 import { availableRoles, eligibleHeroes, poolFor, roleFilterUsable } from '../src/lib/pool.ts';
 import { mergeInto, parseRoster } from '../src/lib/roster.ts';
 import { isHeroRecord, isRecentPick, loadState } from '../src/lib/storage.ts';
-import { clearHash, isOwnHash, parseSquadHash, squadToHash, writeHash } from '../src/lib/share.ts';
+import { clearHash, copyToClipboard, isOwnHash, parseSquadHash, squadToHash, squadUrl, writeHash } from '../src/lib/share.ts';
 import { cssUrl } from '../src/lib/css.ts';
 import {
   ARCANE_ON, EYEBROW_TAPS, IMPATIENT_LINE, INVOCATION, KONAMI, MILESTONES, PROPHECIES, SECRETS,
@@ -253,6 +253,29 @@ check('another parameter after squad is not swallowed',
   JSON.stringify(parseSquadHash('#squad=haze&seed=4')) === '["haze"]',
   JSON.stringify(parseSquadHash('#squad=haze&seed=4')));
 
+// The fallback copy path temporarily focuses a textarea. Removing it must put
+// keyboard focus back where it started rather than dropping the user on body.
+const originalDocument = globalThis.document;
+const originalClipboard = navigator.clipboard;
+let focusRestored = false;
+let fallbackFieldRemoved = false;
+navigator.clipboard = { writeText: async () => { throw new Error('permission denied'); } };
+globalThis.document = {
+  activeElement: { focus: () => { focusRestored = true; } },
+  body: { append: () => {} },
+  createElement: () => ({
+    value: '', style: {}, setAttribute: () => {}, select: () => {},
+    remove: () => { fallbackFieldRemoved = true; },
+  }),
+  execCommand: () => true,
+};
+const fallbackCopied = await copyToClipboard('https://example.test/draw');
+navigator.clipboard = originalClipboard;
+if (originalDocument === undefined) delete globalThis.document;
+else globalThis.document = originalDocument;
+check('the clipboard fallback still copies', fallbackCopied && fallbackFieldRemoved);
+check('the clipboard fallback restores keyboard focus', focusRestored);
+
 /* ── Telling your own hash from somebody else's ──
    Every roll writes the hash, so it doubles as a permalink for the current tab
    and the hash alone can no longer say who wrote it. A marker in history.state
@@ -282,6 +305,21 @@ writeHash(rolled);
 clearHash();
 check('clearHash empties the address bar', location.hash === '');
 check('clearHash drops the marker with it', !isOwnHash() && history.state?.draftOracle === undefined);
+
+// Safari rate-limits History API writes. That browser edge must not turn a
+// completed draw into a rejected load or make copyLink use an older hash.
+const workingReplaceState = history.replaceState;
+history.replaceState = () => { throw new DOMException('too many calls', 'SecurityError'); };
+location.hash = '#squad=stale';
+let historyWriteThrew = null;
+try {
+  check('writeHash reports a refused History API update', writeHash(rolled) === false);
+  check('clearHash reports a refused History API update', clearHash() === false);
+} catch (error) { historyWriteThrew = error; }
+history.replaceState = workingReplaceState;
+check('a refused History API update never escapes', historyWriteThrew === null, String(historyWriteThrew));
+check('squadUrl describes the supplied draw instead of a stale address bar',
+  squadUrl(rolled).endsWith('#squad=abrams,bebop'), squadUrl(rolled));
 
 /* ── Store behaviour ──
    Every piece the store is built from was covered while the way it wires them
@@ -387,7 +425,7 @@ const offlineLink = await quietly(async () => {
   await store.load();
   return store;
 });
-check('a cached roster still restores the senderuFFFDs draw', offlineLink.shared === true, offlineLink.stageLabel);
+check("a cached roster still restores the sender's draw", offlineLink.shared === true, offlineLink.stageLabel);
 location.hash = '#squad=nobody';
 offlineLink.applySharedFromHash();
 check('a cached roster also stops claiming the old draw', offlineLink.shared === false, offlineLink.stageLabel);
@@ -484,7 +522,9 @@ check('and reconnecting does not bank the draw it replaced the fallback with',
 // change into. The stage may call a draw SHARED only while the address bar
 // actually names that draw — which is exactly what the old unknown-hash
 // behaviour broke, and it is cheaper to state once than to re-derive per case.
-for (const next of ['', '#squad=nobody', '#squad=haze', '#seed=4', '#squad=%']) {
+for (const next of [
+  '', '#squad=nobody', '#squad=haze', '#squad=haze,nobody', '#squad=haze,haze', '#seed=4', '#squad=%',
+]) {
   resetBrowser({ hash: '#squad=haze,lash', state: null });
   stubFetch(feed);
   const tab = new OracleStore();
@@ -495,6 +535,22 @@ for (const next of ['', '#squad=nobody', '#squad=haze', '#seed=4', '#squad=%']) 
     !tab.shared || location.hash === `#squad=${squadIds(tab)}`,
     `shared=${tab.shared} hash="${location.hash}" stage=${squadIds(tab)}`);
 }
+
+resetBrowser({ hash: '#squad=haze,nobody,lash', state: null });
+stubFetch(feed);
+const partialShare = new OracleStore();
+await partialShare.load();
+check('a partially unresolved live link is rejected as a whole',
+  !partialShare.shared && location.hash === `#squad=${squadIds(partialShare)}`,
+  `shared=${partialShare.shared} hash=${location.hash} stage=${squadIds(partialShare)}`);
+
+resetBrowser({ hash: '#squad=haze,haze', state: null });
+stubFetch(feed);
+const duplicateShare = new OracleStore();
+await duplicateShare.load();
+check('a shared squad may not repeat a hero',
+  !duplicateShare.shared && new Set(duplicateShare.squad.map((member) => member.id)).size === duplicateShare.squad.length,
+  `shared=${duplicateShare.shared} stage=${squadIds(duplicateShare)}`);
 
 // And clearing the hash on a draw of your own is not a request to redraw it.
 resetBrowser();
@@ -533,6 +589,51 @@ check('a malformed hash does not reject the load', loadThrew === null, String(lo
 check('a malformed hash over a primed cache still draws',
   malformedAgain.mode === 'draw' && malformedAgain.squad.length === 1, malformedAgain.mode);
 check('a malformed hash over a primed cache leaves the store retryable', malformedAgain.fetching === false);
+
+// Failover is for provider failures only. If valid feed data reaches the store
+// and adoption itself throws, trying the second provider hides the application
+// bug behind a false "live roster unavailable" state.
+resetBrowser();
+let adoptionFetches = 0;
+stubFetch(() => { adoptionFetches++; return feed; });
+const hashDescriptor = Object.getOwnPropertyDescriptor(globalThis.location, 'hash');
+Object.defineProperty(globalThis.location, 'hash', {
+  configurable: true,
+  get: () => { throw new Error('adoption failed'); },
+  set: () => {},
+});
+const adoptionFailureStore = new OracleStore();
+let adoptionFailure = null;
+try { await adoptionFailureStore.load(); } catch (error) { adoptionFailure = error; }
+Object.defineProperty(globalThis.location, 'hash', hashDescriptor);
+check('an application error during roster adoption surfaces', adoptionFailure?.message === 'adoption failed');
+check('an adoption error is not retried as a second feed failure', adoptionFetches === 1, `${adoptionFetches} fetches`);
+check('an adoption error still leaves the store retryable', adoptionFailureStore.fetching === false);
+
+// A History API throttle is a browser-edge failure, not an adoption failure.
+// The draw still renders and banks, and copyLink constructs its URL from that
+// draw instead of copying the stale hash replaceState could not replace.
+resetBrowser({ hash: '#squad=stale', state: null });
+stubFetch(feed);
+const allowedReplaceState = history.replaceState;
+const allowedClipboard = navigator.clipboard;
+let copiedAfterHistoryFailure = '';
+history.replaceState = () => { throw new DOMException('too many calls', 'SecurityError'); };
+navigator.clipboard = { writeText: async (value) => { copiedAfterHistoryFailure = value; } };
+const historyLimited = new OracleStore();
+let historyLimitedError = null;
+try {
+  await historyLimited.load();
+  await historyLimited.copyLink();
+} catch (error) { historyLimitedError = error; }
+history.replaceState = allowedReplaceState;
+navigator.clipboard = allowedClipboard;
+check('a refused hash write does not reject roster adoption',
+  historyLimitedError === null && historyLimited.mode === 'draw' && historyLimited.pickCount === 1,
+  String(historyLimitedError));
+check('copyLink copies the draw despite a stale address bar',
+  copiedAfterHistoryFailure === squadUrl(historyLimited.squad) && location.hash === '#squad=stale',
+  `${copiedAfterHistoryFailure} vs ${squadUrl(historyLimited.squad)}`);
 
 // The refresh button re-runs load() against a roster that is already on screen.
 resetBrowser();
@@ -757,6 +858,65 @@ const seedRosterCache = async () => {
   storage.delete('draftOracle_v1');
 };
 
+/** Hold the first live response so a test can act on the provisional draw. */
+const pendingLiveFeed = (payload) => {
+  let release;
+  let calls = 0;
+  stubFetch(() => {
+    calls++;
+    if (calls === 1) return new Promise((resolve) => {
+      release = () => resolve(payload);
+    });
+    return payload;
+  });
+  return () => release();
+};
+
+// A successful reroll makes a provisional squad real. None of that opening
+// squad was banked, so the resulting squad is recorded once in full; reconnect
+// must not add it a second time.
+await seedRosterCache();
+resetBrowser({ keepStorage: true });
+storage.set('draftOracle_v1', JSON.stringify({
+  excluded: CACHED_IDS.slice(3), recent: [], tally: {}, pickCount: 0, squadSize: 2,
+}));
+const releaseSuccessfulReroll = pendingLiveFeed(cachedFeed);
+const provisionalReroll = new OracleStore();
+const successfulRerollLoad = provisionalReroll.load();
+const beforeProvisionalReroll = squadIds(provisionalReroll);
+provisionalReroll.rerollSlot(0);
+check('a successful provisional reroll replaces the slot',
+  squadIds(provisionalReroll) !== beforeProvisionalReroll, `${beforeProvisionalReroll} -> ${squadIds(provisionalReroll)}`);
+check('a successful provisional reroll records the resulting squad once',
+  provisionalReroll.pickCount === 2 && Object.values(provisionalReroll.tally).reduce((sum, count) => sum + count, 0) === 2,
+  `picks=${provisionalReroll.pickCount} tally=${JSON.stringify(provisionalReroll.tally)}`);
+releaseSuccessfulReroll();
+await successfulRerollLoad;
+check('reconnecting does not double-bank a successfully rerolled provisional squad',
+  provisionalReroll.pickCount === 2, `pickCount=${provisionalReroll.pickCount}`);
+
+// A failed reroll changed no draw, so it must leave the provisional debt alone
+// for the live handover to finish.
+await seedRosterCache();
+resetBrowser({ keepStorage: true });
+storage.set('draftOracle_v1', JSON.stringify({
+  excluded: CACHED_IDS.slice(2), recent: [], tally: {}, pickCount: 0, squadSize: 2,
+}));
+const releaseFailedReroll = pendingLiveFeed(cachedFeed);
+const failedProvisionalReroll = new OracleStore();
+const failedRerollLoad = failedProvisionalReroll.load();
+const failedRerollSquad = squadIds(failedProvisionalReroll);
+failedProvisionalReroll.toggleExcluded(failedProvisionalReroll.squad[0].id);
+failedProvisionalReroll.rerollSlot(0);
+check('a failed provisional reroll changes neither squad nor tally',
+  squadIds(failedProvisionalReroll) === failedRerollSquad && failedProvisionalReroll.pickCount === 0,
+  `stage=${squadIds(failedProvisionalReroll)} picks=${failedProvisionalReroll.pickCount}`);
+releaseFailedReroll();
+await failedRerollLoad;
+check('reconnecting still banks the provisional squad after a failed reroll',
+  failedProvisionalReroll.pickCount === 2,
+  `picks=${failedProvisionalReroll.pickCount} tally=${JSON.stringify(failedProvisionalReroll.tally)}`);
+
 await seedRosterCache();
 resetBrowser({ keepStorage: true });
 stubFetch(liveFeed);
@@ -824,6 +984,32 @@ const reconnected = new OracleStore();
 await reconnected.load();
 check('reconnecting recovers the sender\u2019s draw', squadIds(reconnected) === 'wraith', squadIds(reconnected));
 check('and it is still SHARED DRAW', reconnected.shared, reconnected.stageLabel);
+
+// An unresolved hash on an empty pool follows the same confidence boundary.
+// A cached roster may simply be missing the linked hero, while a live roster
+// has enough authority to retire a link that cannot ever become a draw.
+await seedRosterCache();
+const partialDeadHash = `#squad=${CACHED_IDS[0]},nobody`;
+resetBrowser({ hash: partialDeadHash, state: null, keepStorage: true });
+storage.set('draftOracle_v1', JSON.stringify({
+  excluded: CACHED_IDS, recent: [], tally: {}, pickCount: 0, squadSize: 1,
+}));
+stubFetch('fail');
+const cachedEmptyLink = await quietly(async () => { const store = new OracleStore(); await store.load(); return store; });
+check('an empty cached roster preserves a partially unresolved link',
+  cachedEmptyLink.mode === 'empty' && location.hash === partialDeadHash,
+  `${cachedEmptyLink.mode} ${location.hash}`);
+
+resetBrowser({ hash: partialDeadHash, state: null });
+storage.set('draftOracle_v1', JSON.stringify({
+  excluded: LIVE_IDS, recent: [], tally: {}, pickCount: 0, squadSize: 1,
+}));
+stubFetch(liveFeed);
+const liveEmptyLink = new OracleStore();
+await liveEmptyLink.load();
+check('an empty live roster clears a partially unresolved link',
+  liveEmptyLink.mode === 'empty' && location.hash === '',
+  `${liveEmptyLink.mode} ${location.hash}`);
 
 // A live roster that genuinely does not have the hero is a different case: the
 // link is dead, and the app is entitled to take the address bar back.
@@ -929,6 +1115,24 @@ await guestWhoRerolls.load();
 guestWhoRerolls.rerollSlot(1);
 check('rerolling a slot of a received squad claims it', !guestWhoRerolls.shared && isOwnHash(),
   `${guestWhoRerolls.stageLabel} ${location.hash}`);
+
+// When every eligible hero is already held, the fallback pool must not offer
+// the slot's current hero as a fake replacement and count a draw that changed nothing.
+resetBrowser();
+stubFetch(feed);
+const saturatedReroll = new OracleStore();
+await saturatedReroll.load();
+for (const id of rosterIds.slice(2)) saturatedReroll.toggleExcluded(id);
+saturatedReroll.setSquadSize(2);
+saturatedReroll.roll();
+const saturatedSquad = squadIds(saturatedReroll);
+const saturatedCount = saturatedReroll.pickCount;
+saturatedReroll.rerollSlot(0);
+check('a saturated slot reroll is a no-op rather than the same hero again',
+  squadIds(saturatedReroll) === saturatedSquad && saturatedReroll.pickCount === saturatedCount,
+  `stage=${squadIds(saturatedReroll)} picks=${saturatedReroll.pickCount}`);
+check('a saturated slot reroll explains why it did nothing',
+  saturatedReroll.toastMessage === 'No other hero is eligible for that slot.', saturatedReroll.toastMessage);
 
 restoreFetch();
 
@@ -1104,6 +1308,8 @@ for (const field of ['complexity', 'role', 'weapon', 'accent', 'aliases']) {
 }
 check('isHeroRecord rejects junk', [null, undefined, 42, 'x', [], {}].every((v) => !isHeroRecord(v)));
 check('isHeroRecord rejects a blank name', !isHeroRecord(hero({ name: '   ' })));
+check('isHeroRecord rejects complexity outside the game domain',
+  [2.5, 5, -1].every((complexity) => !isHeroRecord(hero({ complexity }))));
 
 const origin = 'https://deadlock.io';
 check('normalise rejects an entry with no name', normalise({}, 0, origin) === null);
@@ -1116,6 +1322,8 @@ check('normalise keeps the display name', dynamo.name === 'Dynamo');
 check('normalise reads complexity and accent', dynamo.complexity === 2 && dynamo.accent === '#D0B945');
 check('normalise rejects a malformed accent', normalise({ name: 'X', colors: { style_hex: 'goldenrod' } }, 0, origin).accent === '');
 check('normalise defaults complexity to 0 when absent', normalise({ name: 'X' }, 0, origin).complexity === 0);
+check('normalise treats out-of-domain complexity as unknown',
+  [2.5, 5, -1].every((complexity) => normalise({ name: 'X', complexity }, 0, origin).complexity === 0));
 check('normalise marks disabled heroes unreleased', normalise({ name: 'X', disabled: true }, 0, origin).released === false);
 check('normalise resolves relative art against the feed origin',
   normalise({ name: 'X', image: '/a/b.png' }, 0, origin).image === 'https://deadlock.io/a/b.png');
@@ -1229,6 +1437,14 @@ const focusable = ['.icon-button', '.primary-button', '.secondary-button', '.her
 const unfocused = focusable.filter((selector) => !bareCss.includes(selector + ':focus-visible'));
 check('every focusable control has a focus-visible ring', unfocused.length === 0, unfocused.join(', '));
 
+const mobileSourceStatus = bareCss.match(
+  /@media\s*\(max-width:\s*760px\)[\s\S]*?\.source-status\s*\{([^}]*)\}/,
+)?.[1] ?? '';
+check('the mobile source status stays in the accessibility tree',
+  mobileSourceStatus.length > 0
+    && !/display:\s*none/.test(mobileSourceStatus)
+    && /clip-path:\s*inset\(50%\)/.test(mobileSourceStatus));
+
 // WCAG 1.4.3 for normal-size text. The panel tints itself with black at 12%
 // over the shell gradient, so these are the composited backgrounds, not the
 // gradient stops.
@@ -1337,7 +1553,7 @@ check('no runtime call asks the origin root', rootRelativeCalls.length === 0,
 section('offline shell');
 
 const SW_SCOPE = 'https://example.test/deadlock-draft-oracle/';
-const SW_CACHE = 'draft-oracle-shell-v1';
+const SW_CACHE = 'draft-oracle-shell-v2';
 
 /** A site serving one build; `broken` names an asset that 404s. */
 const swSite = (build, broken = null) => (url) => {
@@ -1348,8 +1564,14 @@ const swSite = (build, broken = null) => (url) => {
 };
 const shelved = async (worker) => [...(await worker.caches.open(SW_CACHE)).entries.keys()];
 
-let swOnline = true;
-const worker = loadWorker({ scope: SW_SCOPE, network: (url) => (swOnline ? swSite('abc123')(url) : 'offline') });
+let swState = 'online';
+const worker = loadWorker({
+  scope: SW_SCOPE,
+  network: (url) => swState === 'online'
+    ? swSite('abc123')(url)
+    : swState === 'server-error' ? new Response('temporarily unavailable', { status: 503 })
+      : swState === 'not-found' ? new Response('genuinely missing', { status: 404 }) : 'offline',
+});
 await worker.install();
 await worker.activate();
 const shelf = await shelved(worker);
@@ -1375,11 +1597,21 @@ check('a non-GET is passed straight through',
 
 // Pages serves this HTML with max-age=600. Serving it from the worker's cache
 // as well would put a deploy an unbounded distance from its audience.
-swOnline = true;
+swState = 'online';
 check('a navigation online is answered from the network',
   (await worker.request(SW_SCOPE, { mode: 'navigate' }))?.status === 200);
 
-swOnline = false;
+swState = 'server-error';
+const swServerError = await worker.request(SW_SCOPE, { mode: 'navigate' });
+check('a navigation falls back to the shell on a server error',
+  swServerError?.status === 200 && (await swServerError.text()).includes('id="root"'));
+
+swState = 'not-found';
+const swNotFound = await worker.request(SW_SCOPE, { mode: 'navigate' });
+check('a genuine navigation 404 passes through',
+  swNotFound?.status === 404 && (await swNotFound.text()) === 'genuinely missing');
+
+swState = 'offline';
 const swOffline = await worker.request(SW_SCOPE, { mode: 'navigate' });
 check('a navigation offline falls back to the shell', swOffline?.status === 200);
 check('and it is the real document', (await swOffline.text()).includes('id="root"'));

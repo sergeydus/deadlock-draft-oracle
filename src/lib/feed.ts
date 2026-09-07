@@ -6,6 +6,7 @@
  * Do not "simplify" these to direct property access.
  */
 import type { Hero } from '../types.ts';
+import { isHeroComplexity } from './hero.ts';
 
 /** Feed entries are untyped JSON; this is the honest type for them. */
 type Raw = Record<string, any>;
@@ -107,7 +108,11 @@ export function normalise(raw: Raw, index: number, origin: string): Hero | null 
 
   // These are split across the feeds — deadlock-api has role/accent, deadlock.io
   // has the localized aliases — so the enrichment pass merges them.
-  const complexity = Number.isFinite(Number(raw.complexity)) ? Number(raw.complexity) : 0;
+  const parsedComplexity = Number(raw.complexity);
+  // Anything outside the game's 1-4 domain is unknown, not a fifth level. A
+  // truthy value such as 2.5 or 5 would otherwise match no filter chip and make
+  // the hero permanently undrawable.
+  const complexity = isHeroComplexity(parsedComplexity) ? parsedComplexity : 0;
   const role = firstText(raw.hero_type, raw.heroType, raw.role_name).toLowerCase();
   const weapon = firstText(localized(raw.gunArchetype), raw.gun_tag, raw.weapon_archetype);
   const accent = firstText(raw.colors?.style_hex, raw.colors?.ui_hex, raw.color);

@@ -6,6 +6,7 @@
  */
 import { COMPLEXITY_LEVELS, MAX_SQUAD, RECENT_LIMIT, ROLE_ORDER, ROSTER_KEY, STORAGE_KEY } from '../constants.ts';
 import type { CachedRoster, Hero, RecentPick } from '../types.ts';
+import { isHeroComplexity } from './hero.ts';
 
 export interface PersistedState {
   excluded: string[];
@@ -51,7 +52,7 @@ export function isHeroRecord(hero: unknown): hero is Hero {
     && typeof value.description === 'string'
     && typeof value.image === 'string'
     && typeof value.released === 'boolean'
-    && typeof value.complexity === 'number'
+    && isHeroComplexity(value.complexity)
     && typeof value.role === 'string'
     && typeof value.weapon === 'string'
     && typeof value.accent === 'string'
@@ -96,7 +97,7 @@ export function loadState(): Partial<PersistedState> {
     // Accepts both the current key names and the pre-2.0 ones.
     const complexity = data.complexity ?? data.complexityFilter;
     if (Array.isArray(complexity)) {
-      const levels = complexity.filter((level: number) => COMPLEXITY_LEVELS.includes(level));
+      const levels = complexity.filter((level: number) => COMPLEXITY_LEVELS.some((known) => known === level));
       if (levels.length) out.complexity = levels;
     }
     const roles = data.roles ?? data.roleFilter;

@@ -135,6 +135,11 @@ best-effort: if it fails you lose a filter and a colour, never the roster.
   `share.ts` may throw on a hash a user can type. Do not reintroduce
   `URLSearchParams` there either: it decodes before the split, which turns the
   `%2C` protecting an id's own comma back into a separator.
+- **The History API is fallible.** Safari may throw `SecurityError` when it
+  rate-limits `replaceState`. Hash writes and clears are therefore best-effort:
+  refusing one must not reject a completed draw or stop it being banked. A copy
+  action builds its URL from the squad on screen rather than trusting the
+  address bar, so it still copies the right draw after a refused update.
 - **Roster confidence does not tell you whether a draw was banked.** The
   `RosterConfidence` type and the store's private `provisional` field answer
   different questions: how much the *roster* is trusted, and whether the *draw*
@@ -150,15 +155,25 @@ best-effort: if it fails you lose a filter and a colour, never the roster.
   creates a history entry and Back returns to one this tab wrote with its marker
   intact. A restored draw is never owed a tally entry: it was banked when it was
   rolled, or it belongs to whoever sent the link.
+  Slot rerolls are the other transition that must respect the flag. A failed
+  reroll leaves it untouched. A successful reroll of an unbanked opening squad
+  records the resulting squad once in full, then clears it; an already-banked
+  squad records only the replacement. Neither path calls `noteStreak()`, because
+  slot rerolls must not affect the repeated-solo egg.
 - **`shared` is a claim about the address bar.** The stage may label a draw
-  `SHARED DRAW` only while the hash names *that* draw. A hashchange resolving to
-  nothing therefore has to retire the claim whatever it decides about the URL
-  itself — otherwise `copyLink()`, which deliberately does not rewrite the hash
-  for a received draw, hands out a link to heroes the stage is not showing.
+  `SHARED DRAW` only while the hash names *that exact draw*. Every id must
+  resolve, and it must appear only once; a partial or duplicated hash is
+  unresolved as a whole. A hashchange that does not resolve completely therefore
+  has to retire the claim whatever it decides about the URL itself — otherwise
+  `copyLink()`, which deliberately does not rewrite the hash for a received draw,
+  hands out a link to heroes the stage is not showing.
   `applySharedFromHash` reuses `adoptRoster`'s `stranded` rule rather than
   inventing its own, so a live roster replaces a dead hash and a cached one
   leaves it for a reconnect, on both paths alike. The suite sweeps the invariant
   over every shape a hash can change into.
+  The same distinction applies when the pool is empty: an incomplete cached
+  roster preserves an unresolved link for reconnect, while a live roster clears
+  a link it has proved dead even though there is no replacement draw to write.
 - **`eligible` is not the draw pool.** `eligibleHeroes()` is the strict filter;
   `poolFor()` relaxes avoid-recent rather than starve a draw. Anything the user
   reads about "how many can be drawn" — the settings count, the empty stage —
@@ -241,6 +256,11 @@ best-effort: if it fails you lose a filter and a colour, never the roster.
   has failed and the cache becomes all there is. Priming is also skipped when a
   roster is already displayed, so a manual refresh never replaces live data
   with an older copy of itself.
+  Provider failover wraps only fetching and parsing. Once a provider returns a
+  valid roster, an exception in `adoptRoster()` is an application fault and
+  `load()` rejects deliberately; retrying another provider would misreport the
+  bug as an upstream outage. The `finally` still clears `fetching` so a later
+  retry is possible.
 - **The social-card URLs are the one exception to the relative-URL rule.** A
   crawler reading `og:image` has no document to resolve it against, so that tag
   and `og:url` are absolute and hardcoded to the deployed `homepage`. `npm test`
@@ -263,7 +283,8 @@ best-effort: if it fails you lose a filter and a colour, never the roster.
   portraits are not worth carrying without a roster. **Navigations are
   network-first**, because Pages already serves this HTML with `max-age=600`;
   answering them from the worker's cache as well would put a deploy an unbounded
-  distance from its audience. The cache is the offline fallback only.
+  distance from its audience. The cache is the fallback for an offline network
+  or a transient 5xx response; genuine 404s still pass through.
 - **Scope does not extend to storage.** A worker's scope decides which URLs it
   answers for. `CacheStorage` is origin-wide, and `sergeydus.github.io` is one
   origin for *every* Pages project under the account. So caches are named with

@@ -22,7 +22,7 @@
  * make content staleness a non-issue, so this is only for wholesale eviction.
  */
 const CACHE_PREFIX = 'draft-oracle-shell-';
-const CACHE = CACHE_PREFIX + 'v1';
+const CACHE = CACHE_PREFIX + 'v2';
 
 /** The document itself — the URL a navigation falls back to when offline. */
 const SHELL = new URL('./', self.location).href;
@@ -116,6 +116,13 @@ self.addEventListener('fetch', (event) => {
     event.respondWith((async () => {
       try {
         const fresh = await fetch(request);
+        // A reachable server can still be temporarily unable to serve the app.
+        // Keep genuine 404s as 404s, but prefer the last working shell over a
+        // transient server failure.
+        if (fresh.status >= 500) {
+          const cache = await caches.open(CACHE);
+          return (await cache.match(SHELL)) ?? fresh;
+        }
         // Behind the navigation, not in front of it — and held open with
         // waitUntil, because the browser may terminate this worker the moment
         // the response settles, and a detached write is simply lost. A failure

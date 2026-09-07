@@ -1,3 +1,6 @@
+/** The game's 1-4 mechanical-load rating, or 0 when a feed has no valid value. */
+export type HeroComplexity = 0 | 1 | 2 | 3 | 4;
+
 /** A hero, normalised out of whichever community feed answered. */
 export interface Hero {
   /** Stable id from the engine class name; the key for exclusions, tally and share links. */
@@ -11,7 +14,7 @@ export interface Hero {
   /** False for unreleased/test characters. */
   released: boolean;
   /** 1-4 as rated by the game, or 0 when unknown. */
-  complexity: number;
+  complexity: HeroComplexity;
   /** One of ROLE_ORDER, or '' when unknown. */
   role: string;
   /** Gun archetype ('Pistol', 'Spreadshot', …), or ''. */
