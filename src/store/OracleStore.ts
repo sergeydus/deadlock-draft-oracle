@@ -193,10 +193,15 @@ export class OracleStore {
     return this.squad[this.featured] ?? null;
   }
 
+  /** The release setting applies to the roster list as well as the draw pool. */
+  get roster(): Hero[] {
+    return this.releasedOnly ? this.heroes.filter((hero) => hero.released) : this.heroes;
+  }
+
   get visibleRoster(): Hero[] {
     const query = this.search.trim().toLowerCase();
-    if (!query) return this.heroes;
-    return this.heroes.filter((hero) => `${hero.name.toLowerCase()} ${hero.aliases}`.includes(query));
+    if (!query) return this.roster;
+    return this.roster.filter((hero) => `${hero.name.toLowerCase()} ${hero.aliases}`.includes(query));
   }
 
   get tallyRows(): { hero: Hero; count: number }[] {
@@ -249,7 +254,7 @@ export class OracleStore {
   /** How many heroes the search box is currently showing, for the same purpose. */
   get rosterAnnouncement(): string {
     if (!this.heroes.length) return '';
-    if (!this.search.trim()) return `${this.heroes.length} heroes.`;
+    if (!this.search.trim()) return `${this.roster.length} heroes.`;
     // The oracle's reply is the whole point of that search; announcing
     // "0 heroes match" instead would hide the egg from anyone listening.
     const secret = this.secretSignal;
@@ -271,7 +276,7 @@ export class OracleStore {
    * A complexity or role filter empties the pool too, and that has its own copy.
    */
   get everyoneExcluded(): boolean {
-    return this.heroes.length > 0 && this.heroes.every((hero) => this.excluded.has(hero.id));
+    return this.roster.length > 0 && this.roster.every((hero) => this.excluded.has(hero.id));
   }
 
   get rollLabel(): string {

@@ -33,7 +33,7 @@ export async function fetchRoster(source: Source): Promise<Hero[]> {
 }
 
 /**
- * Copy metadata the base feed did not carry from another source, keyed by id.
+ * Fill missing metadata and extend search aliases from another source, keyed by id.
  *
  * Neither feed is complete on its own: deadlock-api has `hero_type` and the
  * accent colour, deadlock.io has the 17-language names and search aliases. Ids
@@ -49,6 +49,15 @@ export function mergeInto(heroes: Hero[], extras: ReadonlyMap<string, Hero>): bo
     const extra = extras.get(hero.id);
     if (!extra) continue;
     for (const field of MERGEABLE_FIELDS) {
+      // A name-only alias from the base API must not block the localized
+      // spellings from the other feed. Keep both, without appending twice.
+      if (field === 'aliases') {
+        if (extra.aliases && !hero.aliases.includes(extra.aliases)) {
+          hero.aliases = [hero.aliases, extra.aliases].filter(Boolean).join(' ');
+          changed = true;
+        }
+        continue;
+      }
       if (!hero[field] && extra[field]) { hero[field] = extra[field]; changed = true; }
     }
     if (!hero.complexity && extra.complexity) { hero.complexity = extra.complexity; changed = true; }

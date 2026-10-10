@@ -8,9 +8,11 @@ or a whole six-stack.
 
 ## Features
 
-- **Live roster** from `deadlock.io`, falling back to `deadlock-api.com`, then to a
-  local cache when both are unreachable. Neither feed is complete on its own, so
-  the second is merged into the first in the background.
+- **Live roster** from `deadlock-api.com`, with `deadlock.io` as a best-effort
+  fallback and metadata source, then a local cache when both are unreachable.
+  The current API includes newly released heroes, portraits, roles and colours.
+  `deadlock.io` currently blocks cross-origin browser requests, so its extra
+  localized search aliases are available only when that provider permits access.
 - **Squad draws** — pick 1 to 6 heroes at once, never a duplicate, with a per-slot
   reroll so you can redraw one teammate without disturbing the rest.
 - **Role coverage** — squad draws take one hero of each role first, then fill
@@ -18,6 +20,8 @@ or a whole six-stack.
 - **Filters** — by complexity (the game's own 1–4 rating) and role
   (marksman / assassin / mystic / brawler). Exclude any hero by clicking its card,
   hide unreleased/test characters, and keep your last five picks out of the pool.
+  “Released heroes only” defaults on and hides unreleased heroes from both the
+  roster grid and the draw pool; switch it off to include test characters.
 - **Shareable draws** — *Copy draw link* produces a URL that reproduces the exact
   result for anyone who opens it.
 - **Search in any language** — matches all 17 localized spellings plus
