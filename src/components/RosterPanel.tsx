@@ -32,7 +32,7 @@ export const RosterPanel = observer(function RosterPanel() {
       <div className="section-heading roster-heading">
         <div>
           <p className="eyebrow">LIVE HERO ROSTER</p>
-          <h2>{store.heroes.length} heroes detected</h2>
+          <h2>{store.roster.length} heroes detected</h2>
         </div>
         <div className="search-box">
           <span aria-hidden="true">⌕</span>
@@ -54,7 +54,7 @@ export const RosterPanel = observer(function RosterPanel() {
             lib/eggs. Anything else keeps the ordinary no-match copy. */}
         {!heroes.length && store.heroes.length > 0 && (
           <p className={classes('empty-roster', store.secretSignal && 'secret-signal')}>
-            {store.secretSignal ?? 'No hero matches that signal.'}
+            {store.secretSignal ?? (store.search.trim() ? 'No hero matches that signal.' : 'No released heroes in this roster.')}
           </p>
         )}
       </div>

@@ -1,8 +1,10 @@
 import type { Source } from './types.ts';
 
 export const SOURCES: Source[] = [
+  // This endpoint permits cross-origin browser requests. The old
+  // assets.deadlock-api.com host is gone; deadlock.io currently omits CORS.
+  { url: 'https://api.deadlock-api.com/v1/assets/heroes', name: 'deadlock-api.com', origin: 'https://api.deadlock-api.com' },
   { url: 'https://deadlock.io/api/v1/heroes.json', name: 'deadlock.io', origin: 'https://deadlock.io' },
-  { url: 'https://assets.deadlock-api.com/v2/heroes', name: 'deadlock-api.com', origin: 'https://assets.deadlock-api.com' },
 ];
 
 export const RECENT_LIMIT = 5;
@@ -10,7 +12,7 @@ export const RECENT_LIMIT = 5;
 export const MAX_SQUAD = 6;
 /** The game's own rating; both feeds agree on it for every released hero. */
 export const COMPLEXITY_LEVELS = [1, 2, 3, 4] as const;
-/** deadlock-api `hero_type`. Only that feed carries it, so it arrives via enrichment. */
+/** deadlock-api `hero_type`; available directly or through enrichment after failover. */
 export const ROLE_ORDER = ['marksman', 'assassin', 'mystic', 'brawler'];
 export const TALLY_ROWS = 6;
 export const FETCH_TIMEOUT_MS = 8000;

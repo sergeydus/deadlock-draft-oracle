@@ -216,6 +216,12 @@ check('mergeInto fills every missing field',
 const kept = [hero({ id: 'inferno', role: 'brawler' })];
 check('mergeInto never overwrites a value the base feed had',
   !mergeInto(kept, new Map([['inferno', hero({ id: 'inferno', role: 'mystic' })]])) && kept[0].role === 'brawler');
+const namedAliases = [hero({ id: 'inferno', aliases: 'infernus fire guy' })];
+const localizedAliases = new Map([['inferno', hero({ id: 'inferno', aliases: 'infernus 火男 infa-nasu' })]]);
+check('mergeInto adds localized aliases even when the base already has an English name',
+  mergeInto(namedAliases, localizedAliases) && namedAliases[0].aliases.includes('fire guy')
+    && namedAliases[0].aliases.includes('火男') && namedAliases[0].aliases.includes('infa-nasu'));
+check('merging the same aliases again changes nothing', !mergeInto(namedAliases, localizedAliases));
 
 /* ── Share links ── */
 section('share links');
@@ -1212,6 +1218,35 @@ check('a failed refresh keeps the roster on screen', refreshFails.heroes.length 
 check('a failed refresh says so rather than claiming a cache', refreshFails.statusMessage === 'Refresh failed — keeping current roster',
   refreshFails.statusMessage);
 
+// Refreshing an older roster must pick up newly released heroes from the
+// current API's snake_case payload, even when the optional feed is blocked.
+resetBrowser();
+stubFetch(feed);
+const rosterUpdate = new OracleStore();
+await rosterUpdate.load();
+rosterUpdate.toggleExcluded('haze');
+const updateSquad = squadIds(rosterUpdate);
+const updateCount = rosterUpdate.pickCount;
+const newReleases = [
+  { id: 84, class_name: 'hero_ratking', name: 'Rat King', complexity: 3, hero_type: 'brawler' },
+  { id: 85, class_name: 'hero_chessmaster', name: 'Solomon', complexity: 1, hero_type: 'mystic' },
+].map((entry) => ({
+  ...entry, player_selectable: true, development_state: 'release',
+  disabled: false, in_development: false,
+  description: { role: 'A newly released hero.' },
+  images: { icon_hero_card: `https://assets-bucket.deadlock-api.com/assets-api-res/images/heroes/${entry.class_name.slice(5)}_card.png` },
+}));
+stubFetch((url) => url === SOURCES[0].url ? [...feed, ...newReleases] : 'fail');
+await rosterUpdate.load();
+check('refresh adopts the current API while the optional feed is unavailable',
+  rosterUpdate.statusKind === 'live' && rosterUpdate.source === SOURCES[0].name);
+check('refresh adds Rat King and Solomon to the released draw pool',
+  ['ratking', 'chessmaster'].every((id) => rosterUpdate.drawPool.some((member) => member.id === id && member.released && member.image)));
+check('refresh saves the updated roster for an offline visit',
+  JSON.parse(storage.get('draftOracle_v1_roster')).heroes.some((member) => member.id === 'chessmaster'));
+check('refresh preserves exclusions and the current draw without counting it again',
+  rosterUpdate.excluded.has('haze') && squadIds(rosterUpdate) === updateSquad && rosterUpdate.pickCount === updateCount);
+
 // Nothing cached and nothing reachable is still the offline stage.
 resetBrowser();
 stubFetch('fail');
@@ -1292,6 +1327,53 @@ searched.setSearch('haze');
 check('searching announces the match count', searched.rosterAnnouncement === '1 hero matches.', searched.rosterAnnouncement);
 searched.setSearch('zzzz');
 check('a search with no matches says zero', searched.rosterAnnouncement === '0 heroes match.', searched.rosterAnnouncement);
+
+// The full API includes development entries. The release toggle used to filter
+// draws but leave those entries in the grid, header count and search results.
+resetBrowser();
+const developmentFeed = [
+  { class_name: 'hero_baba', name: 'Baba', development_state: 'release', player_selectable: true, in_development: true },
+  { class_name: 'hero_artist', name: 'Violet', development_state: 'pre_release', player_selectable: false },
+];
+stubFetch([...feed, ...developmentFeed]);
+const releasedRoster = new OracleStore();
+await releasedRoster.load();
+check('the roster hides unreleased heroes by default while keeping their feed records',
+  releasedRoster.heroes.length === feed.length + developmentFeed.length
+    && releasedRoster.roster.length === feed.length && releasedRoster.visibleRoster.every((member) => member.released));
+check('the roster announces only the released count', releasedRoster.rosterAnnouncement === `${feed.length} heroes.`);
+check('in-development heroes stay hidden even if upstream labels them selectable',
+  !releasedRoster.visibleRoster.some((member) => member.id === 'baba') && !releasedRoster.drawPool.some((member) => member.id === 'baba'));
+releasedRoster.setSearch('baba');
+check('search does not reveal an unreleased hero while released-only is on',
+  releasedRoster.visibleRoster.length === 0 && releasedRoster.rosterAnnouncement === '0 heroes match.');
+releasedRoster.setReleasedOnly(false);
+check('turning released-only off explicitly includes development heroes in search and draws',
+  releasedRoster.roster.length === feed.length + developmentFeed.length
+    && releasedRoster.visibleRoster[0]?.id === 'baba' && releasedRoster.drawPool.some((member) => member.id === 'baba'));
+releasedRoster.setReleasedOnly(true);
+check('turning released-only back on hides the same search result immediately', releasedRoster.visibleRoster.length === 0);
+releasedRoster.setSearch('');
+for (const member of releasedRoster.roster) releasedRoster.toggleExcluded(member.id);
+check('hidden development heroes do not prevent the everyone-excluded message', releasedRoster.everyoneExcluded);
+check('excluding heroes keeps their cards available to re-enable', releasedRoster.visibleRoster.length === feed.length);
+releasedRoster.setReleasedOnly(false);
+check('including unexcluded development heroes retires the everyone-excluded message', !releasedRoster.everyoneExcluded);
+releasedRoster.setReleasedOnly(true);
+resetBrowser({ keepStorage: true });
+stubFetch('fail');
+const cachedReleasedRoster = new OracleStore();
+const cachedReleasedLoad = quietly(() => cachedReleasedRoster.load());
+check('an old full roster cache is filtered before the network answers',
+  cachedReleasedRoster.heroes.length === feed.length + developmentFeed.length
+    && cachedReleasedRoster.visibleRoster.length === feed.length && cachedReleasedRoster.visibleRoster.every((member) => member.released));
+await cachedReleasedLoad;
+resetBrowser();
+stubFetch(feed.map((entry) => ({ ...entry, in_development: true })));
+const noReleasedRoster = new OracleStore();
+await noReleasedRoster.load();
+check('a roster containing only development heroes does not count as everyone excluded',
+  noReleasedRoster.roster.length === 0 && noReleasedRoster.rosterAnnouncement === '0 heroes.' && !noReleasedRoster.everyoneExcluded);
 
 restoreFetch();
 
@@ -1972,14 +2054,24 @@ restoreFetch();
 /* ── Live feeds through the shipped parser ── */
 
 const parsed = {};
+const browserOrigin = new URL(JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).homepage).origin;
+const browserFeeds = [];
 if (offline) {
   console.log('\n(skipping live feed checks: --offline)');
 } else {
   section('live feeds');
   for (const source of SOURCES) {
     try {
-      const response = await fetch(source.url, { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(20000) });
+      // Node does not enforce CORS. A 200 here can still be unusable in the
+      // deployed browser, so send its Origin and inspect the response as well.
+      const response = await fetch(source.url, {
+        headers: { Accept: 'application/json', Origin: browserOrigin },
+        cache: 'no-store', signal: AbortSignal.timeout(20000),
+      });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const allowedOrigin = response.headers.get('access-control-allow-origin');
+      if (allowedOrigin === '*' || allowedOrigin === browserOrigin) browserFeeds.push(source.name);
+      else console.log(`WARN  ${source.name}: browser access blocked by missing or incompatible CORS headers`);
       const payload = await response.json();
       const entries = unwrap(payload);
       const heroes = parseRoster(payload, source.origin);
@@ -2020,14 +2112,20 @@ if (offline) {
     }
   }
 
+  check('at least one live roster feed permits requests from the deployed browser',
+    browserFeeds.length > 0, browserFeeds.join(', ') || `none allow ${browserOrigin}`);
+
   const [primary, fallback] = Object.values(parsed);
   if (primary && fallback) {
     section('cross-feed merge against live data');
     // A failover must not orphan saved exclusions, tally entries or share links.
     const fallbackIds = new Set(fallback.map((h) => h.id));
-    const orphans = primary.map((h) => h.id).filter((id) => !fallbackIds.has(id));
-    check('ids are stable across a source failover', orphans.length === 0,
-      orphans.length ? `orphaned: ${orphans.join(', ')}` : `all ${primary.length} primary ids present in fallback`);
+    // deadlock.io now lists released heroes only; dev-only entries in the API
+    // are not evidence of unstable IDs. Every released hero must still match.
+    const primaryReleased = primary.filter((h) => h.released);
+    const orphans = primaryReleased.map((h) => h.id).filter((id) => !fallbackIds.has(id));
+    check('released ids are stable across a source failover', orphans.length === 0,
+      orphans.length ? `orphaned: ${orphans.join(', ')}` : `all ${primaryReleased.length} released primary ids present in fallback`);
     check('both sources agree on the released roster',
       Math.abs(fallback.filter((h) => h.released).length - primary.filter((h) => h.released).length) <= 3,
       `primary ${primary.filter((h) => h.released).length}, fallback ${fallback.filter((h) => h.released).length}`);
